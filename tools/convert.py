@@ -167,7 +167,8 @@ class Src:
 
     def frame_size(self, h):
         if h[0] == 'a':
-            return self.bounds[2], self.bounds[3]
+            b = self.atlas.bounds(h[2])     # bounds of the timeline being played
+            return b[2], b[3]
         return h[2]['fw'], h[2]['fh']
 
 
@@ -188,7 +189,9 @@ def render_frame(h, scale, ts, flip, nearest):
         return h[2], h[3], h[4], h[5], h[6]
     if h[0] == 'a':
         src, tl, i = h[1], h[2], h[3]
-        b = src.bounds
+        # flixel-animate: the frame is the whole bounds of the played timeline
+        # (the main one, or the symbol's own timeline for "symbol" animations)
+        b = src.atlas.bounds(tl)
         r = src.atlas.render(src.atlas.items(tl, i), k, b[0], b[1], nearest=nearest)
         if r is None:
             return None
