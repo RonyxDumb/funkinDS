@@ -22,18 +22,110 @@ The Friday Night Funkin' source code is Apache 2.0, but the game assets (art, mu
 
 ## Building
 
-You need Python 3 with Pillow and NumPy, ffmpeg, a C compiler, and [devkitPro](https://devkitpro.org) with `nds-dev` (or Docker).
+### Requirements
+
+- Linux or Windows 10/11 with **WSL2 Ubuntu**.
+- Python 3, Pillow, NumPy, FFmpeg, Git and a C compiler.
+- **Docker** (recommended): `build.sh` uses the official `devkitpro/devkitarm` image, so local devkitPro is not required.
+- Alternatively, install [devkitPro](https://devkitpro.org) with `nds-dev` and build with `make`.
+
+The original game assets are required separately; this repository contains no assets or prebuilt ROM.
+
+### 1. Install Ubuntu / WSL dependencies
+
+```sh
+sudo apt update
+sudo apt install -y git python3 python3-pip python3-venv ffmpeg build-essential
+```
+
+Install Docker Engine, or Docker Desktop on Windows with **Settings → Resources → WSL Integration** enabled for Ubuntu. Start Docker and verify access:
+
+```sh
+docker info
+```
+
+If Docker Engine reports `permission denied ... docker.sock`, configure your user (the group must exist):
+
+```sh
+sudo usermod -aG docker "$USER"
+newgrp docker
+docker info
+```
+
+On Docker Desktop, first check that the app is running and WSL integration is enabled. Avoid `sudo ./build.sh`: it may create root-owned build artifacts. Docker group access grants elevated privileges.
+
+### 2. Clone the repository
+
+```sh
+cd ~
+git clone https://github.com/RonyxDumb/funkinDS.git
+cd funkinDS
+```
+
+Already cloned? Use `cd ~/funkinDS && git pull` instead of cloning again. Back up any local changes before deleting an old checkout.
+
+### 3. Set up Python
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install pillow numpy
+```
+
+Re-enable the environment with `source .venv/bin/activate` in later terminal sessions.
+
+### 4. Download official game assets
+
+Run these commands inside `~/funkinDS`:
 
 ```sh
 git clone --depth 1 https://github.com/FunkinCrew/Funkin.assets funkin-assets
-# optional: the mobile app icon for the ROM icon (else Boyfriend's health icon is used)
+
+# Optional: official mobile app icon for the ROM
 git clone --depth 1 --filter=blob:none --sparse https://github.com/FunkinCrew/Funkin.art funkin-art
 git -C funkin-art sparse-checkout set icons
-python3 tools/convert.py funkin-assets --art=funkin-art
-./build.sh                          # builds FunkinDS.nds
 ```
 
-`tools/convert.py <Funkin.assets>` writes `nitrofiles/`, `maxmod_data/`, `source/gen_assets.c` and `include/gen_assets.h`; `make` (or `./build.sh` with no arguments) builds the ROM. The ROM is about 200 MB (songs are IMA ADPCM streams, the cutscenes 256x192 at 12 fps), so it needs a flashcart or melonDS.
+Without the optional `funkin-art` checkout, skip the `--art` option below; Boyfriend's health icon is used.
+
+### 5. Convert assets
+
+```sh
+python3 tools/convert.py funkin-assets --art=funkin-art
+```
+
+This creates `nitrofiles/`, `maxmod_data/`, `source/gen_assets.c` and `include/gen_assets.h`. Allow sufficient free disk space.
+
+### 6. Build
+
+**Docker (recommended):**
+
+```sh
+chmod +x build.sh
+./build.sh
+```
+
+`./build.sh` without arguments **only builds**; it does not convert the assets again.
+
+**With locally installed devkitPro / nds-dev:**
+
+```sh
+make
+```
+
+For local `make`, ensure `DEVKITARM` and the other devkitPro environment settings are configured.
+
+The output is **`FunkinDS.nds`** at the root of the repository, approximately **200 MB** (IMA ADPCM audio and 256×192 cutscenes at 12 fps). Test it in **melonDS** or with compatible flashcart software such as TWiLight Menu++ / nds-bootstrap.
+
+### Troubleshooting
+
+- **`destination path 'funkinDS' already exists`**: enter the existing folder with `cd ~/funkinDS` and run `git pull`.
+- **Docker socket permission denied**: check `docker info`, running Docker, group membership or Docker Desktop WSL integration as described above.
+- **`Permission denied` under `build/`**: earlier root-owned output may be the cause. From the repository root, if `build/` exists, run `sudo chown -R "$USER:$(id -gn)" build` and retry without `sudo`.
+- **`No module named PIL` or `numpy`**: `source .venv/bin/activate` then `python3 -m pip install pillow numpy`.
+- **`ffmpeg: command not found`**: `sudo apt install ffmpeg`.
+- **`Please set DEVKITARM`**: local `make` needs devkitPro configured; alternatively use Docker via `./build.sh`.
+- **Missing or stale in-game assets**: rerun asset conversion before rebuilding.
 
 ### GitHub Actions
 
