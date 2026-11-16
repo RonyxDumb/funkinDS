@@ -1,0 +1,10 @@
+build/
+build_tools/
+*.elf
+*.nds
+__pycache__/
+# generated from your own copy of the game assets (not redistributable)
+nitrofiles/
+maxmod_data/
+source/gen_assets.c
+include/gen_assets.h
