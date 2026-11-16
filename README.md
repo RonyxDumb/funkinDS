@@ -1,6 +1,6 @@
 # Friday Night Funkin' DS
 
-An unofficial Nintendo DS port of [Friday Night Funkin'](https://github.com/FunkinCrew/Funkin) (V-Slice), built with the same approach as [twiddleDS](https://github.com/RonyxDumb/twiddleDS) and [olbDS](https://github.com/RonyxDumb/olbDS): this is not HaxeFlixel running on a DS. The game was rewritten in C with libnds, following the V-Slice source (PlayState, Strumline, Conductor, BaseCharacter / Bopper, Stage, the song events and the stage scripts), and uses the original game data and art converted for the hardware.
+An unofficial Nintendo DS port of [Friday Night Funkin'](https://github.com/FunkinCrew/Funkin) (V-Slice). This is not HaxeFlixel running on a DS. The game was rewritten in C with libnds, following the V-Slice source (PlayState, Strumline, Conductor, BaseCharacter / Bopper, Stage, the song events and the stage scripts), and uses the original game data and art converted for the hardware.
 
 ## What is ported
 
