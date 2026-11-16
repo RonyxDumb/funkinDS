@@ -26,6 +26,7 @@ typedef struct {
 enum { ROLE_BF, ROLE_GF, ROLE_DAD, ROLE_OTHER };
 
 typedef struct {
+	char id[32];            // character id (without the _p / _dead suffix)
 	u8 *data;               // whole .chr file
 	const ChrHeader *hdr;
 	const ChrAnimRec *anims;
@@ -60,6 +61,7 @@ int chr_find_anim(Character *c, const char *name);
 bool chr_has_anim(Character *c, const char *name);
 const char *chr_anim_name(Character *c);
 void chr_play(Character *c, const char *name, bool force);
+void chr_play_any(Character *c, const char *name);   // name, or name1 / name2 alternating
 void chr_dance(Character *c, bool force);
 bool chr_is_singing(Character *c);
 void chr_sing(Character *c, int dir, bool miss, const char *suffix);

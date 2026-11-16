@@ -63,7 +63,7 @@ typedef struct {
 // songs / weeks
 // ---------------------------------------------------------------------------
 typedef struct {
-	const char *id, *name, *artist;
+	const char *id, *tag, *name, *artist;     // tag = id + variation (file names)
 	const StageDef *stage;
 	u8 pixel;
 	const char *player, *gf, *opp;   // character file tags
@@ -80,6 +80,10 @@ typedef struct {
 } WeekInfo;
 
 typedef struct { const char *tag, *icon; u8 hasDead; } ChrInfo;
+// freeplay: options = (song_info index << 3) | difficulty, per playable character (bf, pico)
+typedef struct { const char *name; u8 week; u8 n[2]; u16 opt[2][12]; } FreeplaySong;
+// note kinds handled by the character scripts
+typedef struct { const char *chr; u8 kind; const char *hit, *miss; } KindAnim;
 typedef struct { const char *name; const SheetDef *sheet; } IconDef;
 
 typedef struct {
@@ -148,4 +152,3 @@ typedef struct { float t, bpm; } TimeChange;
 typedef struct { float t; u8 type; s8 i0; u8 ease, pad; float f[4]; char s[16]; } ChartEvent;
 typedef struct { float t, len; u8 dir, kind; u16 pad; } ChartNote;
 enum { CEV_FOCUS, CEV_ZOOM, CEV_BOP, CEV_ANIM, CEV_SCROLL };
-enum { KIND_NORMAL, KIND_NOANIM, KIND_ALT, KIND_UGH, KIND_HEH };

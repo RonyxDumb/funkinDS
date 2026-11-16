@@ -345,124 +345,333 @@ void story_draw(void) {
 }
 
 // ===========================================================================
-// Freeplay
+// Freeplay (FreeplayState): DJ on the left, song capsules on the right
 // ===========================================================================
-static Sheet shDesat, shAlpha;
-static int fpSel, fpDiff = 1;
-static float fpScroll, fpLerpScore;
+#include "character.h"
 
-static int fp_song_week_color(int s) {
-	static const u32 cols[8] = { 0x9271FD, 0x9271FD, 0x223344, 0x941653, 0xFC96D7, 0xA0D1FF, 0xFF78BF, 0xF6B604 };
-	return cols[song_info[s].week & 7];
+static Sheet shFpBg, shFpDiff;
+static Character dj;
+static int fpList[FREEPLAY_COUNT], fpCount;
+static int fpSel, fpOpt;
+static float fpScroll, fpT;
+static bool fpChosen;
+static int fpDiffLoaded = -1;
+static const Cam menuCam = { 640, 360, 0.75f, 0, 0 };
+
+static const FreeplaySong *fp_cur(void) { return &freeplay_songs[fpList[fpSel]]; }
+static int fp_opt_count(void) { return fp_cur()->n[save.player]; }
+static int fp_opt(void) { return fp_cur()->opt[save.player][fpOpt]; }
+
+static void fp_load_diff(void) {
+	int d = fp_opt() & 7;
+	if (d == fpDiffLoaded) return;
+	sheet_unload(&shFpDiff);
+	if (fpdiff_sheets[d]) sheet_load(&shFpDiff, fpdiff_sheets[d], false);
+	fpDiffLoaded = d;
+}
+
+static void fp_pick_opt(int wantDiff) {
+	fpOpt = 0;
+	for (int i = 0; i < fp_opt_count(); i++) if ((fp_cur()->opt[save.player][i] & 7) == wantDiff) fpOpt = i;
 }
 
 static void fp_sub(void) {
-	sub_header("FREEPLAY");
+	sub_header(save.player ? "FREEPLAY - PICO" : "FREEPLAY - BOYFRIEND");
 	char b[64], sc[24];
 	for (int i = -3; i <= 3; i++) {
-		int s = fpSel + i;
-		if (s < 0 || s >= SONG_COUNT) continue;
-		int y = 76 + i * 14;
+		int k = fpSel + i;
+		if (k < 0 || k >= fpCount) continue;
+		int y = 72 + i * 14;
 		if (i == 0) sub_fill(8, y - 2, 240, 14, RGB(0xF9, 0xCF, 0x51));
-		sub_text_centered(FONT_VCR8O, 128, y, song_info[s].name, i == 0 ? RGB(30, 20, 10) : WHITE);
+		sub_text_centered(FONT_VCR8O, 128, y, freeplay_songs[fpList[k]].name, i == 0 ? RGB(30, 20, 10) : WHITE);
 	}
-	sub_fill(0, 128, 256, 1, RGB(120, 100, 160));
-	snprintf(b, sizeof(b), "< %s >", diff_name(fpDiff));
-	sub_text_centered(FONT_VCR12O, 128, 134, b, fpDiff == 0 ? RGB(120, 255, 120) : fpDiff == 1 ? RGB(255, 230, 100) : RGB(255, 100, 100));
-	format_score(sc, save.songScore[fpSel][fpDiff]);
+	sub_fill(0, 122, 256, 1, RGB(120, 100, 160));
+	int o = fp_opt(), si = o >> 3, d = o & 7;
+	const char *var = strchr(song_info[si].tag, '-') && strcmp(song_info[si].tag, song_info[si].id) ? song_info[si].tag + strlen(song_info[si].id) + 1 : "";
+	snprintf(b, sizeof(b), "< %s%s%s >", diff_name(d), *var && d < 3 ? " - " : "", d < 3 ? var : "");
+	static const u16 dc[5] = { RGB(120, 255, 120), RGB(255, 230, 100), RGB(255, 100, 100), RGB(0xC0, 0x60, 0xFF), RGB(0xFF, 0x40, 0xA0) };
+	sub_text_centered(FONT_VCR12O, 128, 128, b, dc[d]);
+	format_score(sc, save.songScore[si][d]);
 	snprintf(b, sizeof(b), "PERSONAL BEST: %s", sc);
-	sub_text_centered(FONT_VCR8, 128, 156, b, WHITE);
-	sub_text_centered(FONT_VCR8, 128, 178, "A: play  B: back  L/R: difficulty", RGB(150, 140, 170));
+	sub_text_centered(FONT_VCR8, 128, 148, b, WHITE);
+	snprintf(b, sizeof(b), "%s", song_info[si].artist);
+	sub_text_centered(FONT_VCR8, 128, 160, b, RGB(180, 170, 200));
+	sub_fill(70, 172, 116, 16, RGB(60, 40, 90));
+	sub_text_centered(FONT_VCR8, 128, 176, "SELECT: character", WHITE);
 }
 
 void freeplay_enter(void) {
-	sheet_load(&shDesat, &sheet_menudesat, false);
-	sheet_load(&shAlpha, &sheet_alphabet, false);
+	chr_slots_reset();
+	sheet_load(&shFpBg, save.player ? &sheet_fpbg_pico : &sheet_fpbg_bf, false);
+	fpDiffLoaded = -1;
+	chr_load(&dj, save.player ? "dj_pico" : "dj_bf", ROLE_OTHER);
+	dj.x = 640 + dj.hdr->gx;
+	dj.y = 366 + dj.hdr->gy;
+	chr_play(&dj, "intro", true);
 	font_load(FONT_VCR12O, false);
+	font_load(FONT_VCR12O, true);
 	font_load(FONT_VCR8, false);
 	font_load(FONT_VCR8O, false);
 	menu_music(false);
-	if (save.lastDiff >= 0 && save.lastDiff < 3) fpDiff = save.lastDiff;
+	fpCount = 0;
+	for (int i = 0; i < FREEPLAY_COUNT; i++) if (freeplay_songs[i].n[save.player]) fpList[fpCount++] = i;
+	if (fpSel >= fpCount) fpSel = 0;
+	fp_pick_opt(save.lastDiff);
+	fp_load_diff();
 	fpScroll = fpSel;
+	fpChosen = false;
+	fpT = 0;
 	fp_sub();
 	g_fade = 0;
 }
 
-void freeplay_leave(void) { sheet_unload(&shDesat); sheet_unload(&shAlpha); }
+void freeplay_leave(void) {
+	sheet_unload(&shFpBg);
+	sheet_unload(&shFpDiff);
+	chr_unload(&dj);
+	chr_slots_reset();
+}
 
 static void fp_change(int d) {
-	fpSel = (fpSel + d + SONG_COUNT) % SONG_COUNT;
+	int want = fp_opt() & 7;
+	fpSel = (fpSel + d + fpCount) % fpCount;
+	fp_pick_opt(want);
+	fp_load_diff();
+	audio_sfx(SFX_SCROLL, 0.5f);
+	fp_sub();
+}
+
+static void fp_change_diff(int d) {
+	fpOpt = (fpOpt + d + fp_opt_count()) % fp_opt_count();
+	fp_load_diff();
 	audio_sfx(SFX_SCROLL, 0.5f);
 	fp_sub();
 }
 
 static void fp_accept(void) {
-	g_storyMode = false;
-	g_song = fpSel;
-	g_diff = fpDiff;
-	save.lastDiff = fpDiff;
+	fpChosen = true;
+	fpT = 0;
+	chr_play(&dj, "confirm", true);
 	audio_sfx(SFX_CONFIRM, 0.7f);
-	audio_stop();
-	state_switch(ST_PLAY);
 }
 
 void freeplay_update(float dt) {
 	fpScroll += (fpSel - fpScroll) * fps_ratio(0.2f, dt);
+	fpT += dt;
+	chr_update(&dj, dt, 100, false);
+	if (dj.finished && !strcmp(chr_anim_name(&dj), "intro")) chr_play(&dj, "idle", true);
+	if (fpChosen) {
+		if (fpT > 1.0f) g_fade = clampf((fpT - 1.0f) / 0.4f, 0, 1);
+		if (fpT > 1.4f) {
+			int o = fp_opt();
+			g_storyMode = false;
+			g_song = o >> 3;
+			g_diff = o & 7;
+			save.lastDiff = g_diff;
+			audio_stop();
+			state_switch(ST_PLAY);
+		}
+		return;
+	}
 	if (kDown & KEY_UP) fp_change(-1);
 	if (kDown & KEY_DOWN) fp_change(1);
-	if (kDown & (KEY_LEFT | KEY_L)) { fpDiff = (fpDiff + 2) % 3; audio_sfx(SFX_SCROLL, 0.5f); fp_sub(); }
-	if (kDown & (KEY_RIGHT | KEY_R)) { fpDiff = (fpDiff + 1) % 3; audio_sfx(SFX_SCROLL, 0.5f); fp_sub(); }
+	if (kDown & (KEY_LEFT | KEY_L)) fp_change_diff(-1);
+	if (kDown & (KEY_RIGHT | KEY_R)) fp_change_diff(1);
 	if (kDown & KEY_ACCEPT) { fp_accept(); return; }
+	if (kDown & KEY_SELECT) { audio_sfx(SFX_CONFIRM, 0.5f); state_switch(ST_CHARSELECT); return; }
 	if (kDown & KEY_B) { audio_sfx(SFX_CANCEL, 0.6f); state_switch(ST_MAINMENU); }
 	if (kDown & KEY_TOUCH) {
-		if (touch.py >= 30 && touch.py < 126) {
-			int i = (touch.py - 74 + 7 + 140) / 14 - 10;
+		if (touch.py >= 26 && touch.py < 120) {
+			int i = (touch.py - 72 + 7 + 140) / 14 - 10;
 			if (i == 0) fp_accept();
 			else if (i >= -3 && i <= 3) fp_change(i);
-		} else if (touch.py >= 130 && touch.py < 150) {
-			fpDiff = (fpDiff + (touch.px < 128 ? 2 : 1)) % 3;
-			fp_sub();
-		}
+		} else if (touch.py >= 124 && touch.py < 144) fp_change_diff(touch.px < 128 ? -1 : 1);
+		else if (touch.py >= 170) state_switch(ST_CHARSELECT);
 	}
-	(void)fpLerpScore;
-}
-
-// Alphabet (bold) text, x/y = top-left in DS px, sc = DS px per unit
-static void alpha_text(float x, float y, float sc, const char *s, u16 color, int alpha) {
-	for (; *s; s++) {
-		int c = (u8)*s;
-		if (c < 32 || c > 126) c = '?';
-		const s16 *m = alphabet_map[c - 32];
-		if (m[0] >= 0) sheet_draw(&shAlpha, m[0], x, y, sc, color, alpha);
-		x += m[1] * sc;
-	}
-}
-
-static float alpha_width(const char *s, float sc) {
-	float w = 0;
-	for (; *s; s++) {
-		int c = (u8)*s;
-		if (c < 32 || c > 126) c = '?';
-		w += alphabet_map[c - 32][1] * sc;
-	}
-	return w;
 }
 
 void freeplay_draw(void) {
-	u32 c = fp_song_week_color(fpSel);
-	float sc0 = 0.27f;
-	sheet_draw(&shDesat, 0, 128 - 1280 * sc0 / 2, 96 - 720 * sc0 / 2, sc0, HEXC(c), 31);
-	for (int i = -3; i <= 3; i++) {
-		int s = fpSel + i;
-		if (s < 0 || s >= SONG_COUNT) continue;
-		float d = s - fpScroll;
-		float y = 96 + d * 34 - 12;
-		float x = 30 + d * 10;
-		float sc = 0.32f;
-		float w = alpha_width(song_info[s].name, sc);
-		if (w > 230) sc *= 230 / w;
-		alpha_text(x, y, sc, song_info[s].name, WHITE, i == 0 ? 31 : 18);
+	// backing card (pinkBack, tinted per character) + the week 1 background
+	u16 card = save.player ? RGB(0xFF, 0x9F, 0xC8) : RGB(0xFF, 0xD8, 0x63);
+	gfx_rect(0, 0, 256, 192, RGB(0, 0, 0), 31);
+	sheet_draw(&shFpBg, 0, mx(524 * 0.74f), my(0), MS, WHITE, 31);
+	gfx_rect(0, my(0), mx(524), my(720), card, 31);
+	chr_draw(&dj, &menuCam);
+	// capsules
+	for (int i = -4; i <= 4; i++) {
+		int k = fpSel + i;
+		if (k < 0 || k >= fpCount) continue;
+		float d = k - fpScroll;
+		float y = 96 + d * 22 - 8;
+		float x = 132 + fabsf(d) * 6;
+		bool s = i == 0;
+		gfx_rect(x, y, 256, y + 18, s ? RGB(0x20, 0x30, 0x60) : RGB(0x10, 0x10, 0x28), s ? 31 : 22);
+		gfx_rect(x, y, x + 2, y + 18, s ? RGB(0x33, 0xFF, 0xFF) : RGB(0x60, 0x60, 0x90), 31);
+		font_draw(FONT_VCR12O, x + 6, y + 3, freeplay_songs[fpList[k]].name, s ? WHITE : RGB(170, 170, 200), s ? 31 : 24);
 	}
+	if (shFpDiff.loaded) draw_centered(&shFpDiff, 0, 62, 14, MS * 0.75f, WHITE, 31);
+	if (fpChosen && ((int)(fpT * 16) & 1)) gfx_rect(132, 87, 256, 106, WHITE, 8);
+}
+
+// ===========================================================================
+// Character select (CharSelectSubState, simplified): Boyfriend / Pico
+// ===========================================================================
+static Sheet shCs, shCsName;
+static Character chill;
+static int csSel;
+static float csT;
+static bool csChosen;
+
+static void cs_load(void) {
+	chr_unload(&chill);
+	chr_slots_reset();
+	chr_load(&chill, csSel ? "chill_pico" : "chill_bf", ROLE_OTHER);
+	chill.x = 640 - chill.hdr->W / 2 + 120;
+	chill.y = 140;
+	chr_play(&chill, "slidein", true);
+	sheet_unload(&shCsName);
+	sheet_load(&shCsName, csSel ? &sheet_csname_pico : &sheet_csname_bf, false);
+}
+
+static void cs_sub(void) {
+	sub_header("CHOOSE YOUR CHARACTER");
+	for (int i = 0; i < 2; i++) {
+		int x = 24 + i * 112;
+		sub_fill(x, 48, 96, 80, i == csSel ? RGB(0xF9, 0xCF, 0x51) : RGB(60, 40, 90));
+		sub_text_centered(FONT_VCR12O, x + 48, 82, i ? "PICO" : "BOYFRIEND", i == csSel ? RGB(30, 20, 10) : WHITE);
+	}
+	sub_text_centered(FONT_VCR8, 128, 150, "LEFT/RIGHT: choose   A: confirm", RGB(200, 200, 220));
+	sub_text_centered(FONT_VCR8, 128, 164, "B: back", RGB(200, 200, 220));
+}
+
+void charselect_enter(void) {
+	sheet_load(&shCs, &sheet_charselect, false);
+	font_load(FONT_VCR12O, false);
+	font_load(FONT_VCR8, false);
+	memset(&chill, 0, sizeof(chill));
+	csSel = save.player;
+	csChosen = false;
+	cs_load();
+	cs_sub();
+	g_fade = 0;
+}
+
+void charselect_leave(void) {
+	sheet_unload(&shCs);
+	sheet_unload(&shCsName);
+	chr_unload(&chill);
+	chr_slots_reset();
+}
+
+void charselect_update(float dt) {
+	csT += dt;
+	chr_update(&chill, dt, 100, false);
+	if (chill.finished && !strcmp(chr_anim_name(&chill), "slidein")) chr_play(&chill, "idle", true);
+	if (csChosen) {
+		if (csT > 0.8f) g_fade = clampf((csT - 0.8f) / 0.4f, 0, 1);
+		if (csT > 1.2f) {
+			save.player = csSel;
+			save_write();
+			state_switch(ST_FREEPLAY);
+		}
+		return;
+	}
+	int old = csSel;
+	if (kDown & (KEY_LEFT | KEY_RIGHT)) csSel ^= 1;
+	if (kDown & KEY_TOUCH && touch.py >= 48 && touch.py < 128) {
+		int i = touch.px < 128 ? 0 : 1;
+		if (i == csSel) { csChosen = true; csT = 0; chr_play(&chill, "select", true); audio_sfx(SFX_CONFIRM, 0.7f); }
+		csSel = i;
+	}
+	if (old != csSel && !csChosen) { audio_sfx(SFX_SCROLL, 0.5f); cs_load(); cs_sub(); }
+	if (kDown & KEY_ACCEPT) { csChosen = true; csT = 0; chr_play(&chill, "select", true); audio_sfx(SFX_CONFIRM, 0.7f); }
+	if (kDown & KEY_B) { audio_sfx(SFX_CANCEL, 0.6f); state_switch(ST_FREEPLAY); }
+}
+
+void charselect_draw(void) {
+	gfx_rect(0, 0, 256, 192, RGB(0, 0, 0), 31);
+	sheet_draw(&shCs, CHARSELECT_BG, mx(-150), my(-10), MS, WHITE, 31);
+	sheet_draw(&shCs, CHARSELECT_STAGE, mx(-40), my(390), MS, WHITE, 31);
+	chr_draw(&chill, &menuCam);
+	sheet_draw(&shCs, CHARSELECT_CURTAINS, mx(-47), my(-49), MS, WHITE, 31);
+	if (shCsName.loaded) draw_centered(&shCsName, 0, mx(1008), my(100), MS, WHITE, 31);
+}
+
+// ===========================================================================
+// Results (ResultState, simplified)
+// ===========================================================================
+static float rsT;
+static int rsRank;
+static const char *rankNames[6] = { "PERFECT", "PERFECT", "EXCELLENT", "GREAT", "GOOD", "LOSS" };
+static const u16 rankCols[6] = { RGB(255, 220, 80), RGB(255, 180, 255), RGB(120, 220, 255), RGB(120, 255, 140), RGB(255, 230, 120), RGB(160, 120, 255) };
+
+// Scoring.calculateRank
+static int calc_rank(const Results *r) {
+	if (r->notes <= 0) return 4;
+	int hit = r->judged[0] + r->judged[1];
+	float comp = (float)hit / r->notes;
+	if (r->judged[0] == r->notes && r->misses == 0) return 0;
+	if (comp >= 1.0f && r->misses == 0) return 1;
+	if (comp >= 0.9f) return 2;
+	if (comp >= 0.8f) return 3;
+	if (comp >= 0.6f) return 4;
+	return 5;
+}
+
+void results_enter(void) {
+	font_load(FONT_VCR16O, true);
+	font_load(FONT_VCR12O, true);
+	font_load(FONT_VCR12O, false);
+	font_load(FONT_VCR8, false);
+	rsT = 0;
+	rsRank = calc_rank(&g_results);
+	audio_play_music("nitro:/snd/results.adp", true, 1);
+	Results *r = &g_results;
+	char b[64], sc[24];
+	sub_header("RESULTS");
+	sub_text_centered(FONT_VCR12O, 128, 32, r->title, WHITE);
+	static const char *jn[4] = { "SICK", "GOOD", "BAD", "SHIT" };
+	static const u16 jc[4] = { RGB(80, 220, 255), RGB(120, 255, 120), RGB(255, 200, 80), RGB(255, 100, 100) };
+	snprintf(b, sizeof(b), "TOTAL NOTES: %d", r->notes);
+	sub_text(FONT_VCR8, 40, 56, b, WHITE);
+	snprintf(b, sizeof(b), "MAX COMBO:   %d", r->maxCombo);
+	sub_text(FONT_VCR8, 40, 68, b, WHITE);
+	for (int i = 0; i < 4; i++) {
+		snprintf(b, sizeof(b), "%-5s        %d", jn[i], r->judged[i]);
+		sub_text(FONT_VCR8, 40, 84 + i * 12, b, jc[i]);
+	}
+	snprintf(b, sizeof(b), "MISSED       %d", r->misses);
+	sub_text(FONT_VCR8, 40, 132, b, RGB(200, 120, 255));
+	format_score(sc, r->score);
+	snprintf(b, sizeof(b), "SCORE: %s%s", sc, r->newBest ? "  NEW BEST!" : "");
+	sub_text_centered(FONT_VCR12O, 128, 152, b, WHITE);
+	sub_text_centered(FONT_VCR8, 128, 178, "A / START: continue", RGB(150, 140, 170));
+	g_fade = 0;
+}
+
+void results_leave(void) { audio_stop(); }
+
+void results_update(float dt) {
+	rsT += dt;
+	if (rsT > 0.5f && (kDown & (KEY_ACCEPT | KEY_TOUCH | KEY_B))) {
+		audio_sfx(SFX_CONFIRM, 0.6f);
+		menu_music(false);
+		state_switch(g_storyMode ? ST_STORY : ST_FREEPLAY);
+	}
+}
+
+void results_draw(void) {
+	gfx_gradient(0, 0, 256, 192, RGB(0xFE, 0xC8, 0x5C), RGB(0xFD, 0xD6, 0x43), 31);
+	for (int i = 0; i < 6; i++) {
+		float y = fmodf(rsT * 30 + i * 40, 240) - 40;
+		font_draw(FONT_VCR12O, 8, y, rankNames[rsRank], RGB(0xFF, 0xB0, 0x30), 12);
+	}
+	float k = clampf(rsT * 3, 0, 1);
+	float sc = 1 + (1 - k) * 2;
+	const char *rn = rankNames[rsRank];
+	float w = font_width(FONT_VCR16O, rn) * sc;
+	font_draw_scaled(FONT_VCR16O, 128 - w / 2, 70 - 8 * sc, sc, rn, rankCols[rsRank], A31(k));
+	font_draw_centered(FONT_VCR12O, 128, 110, g_results.title, WHITE, 31);
 }
 
 // ===========================================================================

@@ -191,10 +191,12 @@ extern bool touchDown;
 typedef struct {
 	bool downscroll, ghostTapping, botplay, flashing, camZoom;
 	int noteOffset;                       // ms
-	int songScore[SONG_COUNT][3];
-	int weekScore[WEEK_COUNT][3];
-	u8 songRank[SONG_COUNT][3];
+	int songScore[SONG_COUNT][DIFF_COUNT];
+	int weekScore[WEEK_COUNT][DIFF_COUNT];
+	u8 songRank[SONG_COUNT][DIFF_COUNT];
 	int lastDiff;
+	int player;                           // 0 bf, 1 pico
+	int lastFreeplay;
 } Save;
 extern Save save;
 void save_load(void);
@@ -203,16 +205,16 @@ void save_write(void);
 // ---------------------------------------------------------------------------
 // states
 // ---------------------------------------------------------------------------
-enum { ST_TITLE, ST_MAINMENU, ST_STORY, ST_FREEPLAY, ST_OPTIONS, ST_PLAY, ST_GAMEOVER, ST_COUNT };
+enum { ST_TITLE, ST_MAINMENU, ST_STORY, ST_FREEPLAY, ST_OPTIONS, ST_PLAY, ST_GAMEOVER, ST_CHARSELECT, ST_RESULTS, ST_COUNT };
 void state_switch(int st);
 typedef struct { void (*enter)(void); void (*update)(float); void (*draw)(void); void (*leave)(void); } StateDef;
 #define DECL_STATE(n) void n##_enter(void); void n##_update(float dt); void n##_draw(void); void n##_leave(void);
 DECL_STATE(title) DECL_STATE(mainmenu) DECL_STATE(story) DECL_STATE(freeplay) DECL_STATE(options) DECL_STATE(play)
-DECL_STATE(gameover)
+DECL_STATE(gameover) DECL_STATE(charselect) DECL_STATE(results)
 
 // song selection (PlayStatePlaylist)
 extern int g_song;              // song_info index
-extern int g_diff;              // 0 easy, 1 normal, 2 hard
+extern int g_diff;              // 0 easy, 1 normal, 2 hard, 3 erect, 4 nightmare
 extern bool g_storyMode;
 extern int g_week;
 extern int g_weekPos;           // index in the week playlist
@@ -225,6 +227,10 @@ extern float g_fade;
 extern float g_subFade;
 
 void menu_music(bool fadeIn);
+
+// results (ResultState): totals of the song, or of the whole week in story mode
+typedef struct { int score, misses, maxCombo, notes; int judged[4]; char title[48]; bool newBest; } Results;
+extern Results g_results;
 void format_score(char *out, int score);
 const char *diff_name(int d);
 

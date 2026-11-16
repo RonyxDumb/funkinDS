@@ -281,6 +281,7 @@ void stage_draw(const Cam *cam) {
 		int o = order[i];
 		if (o >= 1000) {
 			Character *c = P.chars[o - 1000];
+			if (o - 1000 == ROLE_GF && P.abot.loaded) chr_draw(&P.abot, cam);
 			if (c && c->loaded) chr_draw(c, cam);
 			continue;
 		}

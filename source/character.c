@@ -39,6 +39,11 @@ bool chr_load(Character *c, const char *tag, int role) {
 	u32 size;
 	c->data = file_load(path, &size);
 	if (!c->data) return false;
+	snprintf(c->id, sizeof(c->id), "%s", tag);
+	char *u = strstr(c->id, "_p");
+	if (u && (u[2] == 0 || u[2] == '_')) *u = 0;
+	u = strstr(c->id, "_dead");
+	if (u) *u = 0;
 	c->hdr = (const ChrHeader *)c->data;
 	if (memcmp(c->hdr->magic, "CHR1", 4)) { free(c->data); c->data = NULL; return false; }
 	c->anims = (const ChrAnimRec *)(c->data + c->hdr->offAnims);
@@ -104,6 +109,15 @@ void chr_play(Character *c, const char *name, bool force) {
 	c->animTime = 0;
 	c->frameIdx = 0;
 	c->finished = false;
+}
+
+void chr_play_any(Character *c, const char *name) {
+	static bool alt;
+	if (chr_has_anim(c, name)) { chr_play(c, name, true); return; }
+	char n[40];
+	snprintf(n, sizeof(n), "%s%d", name, alt ? 2 : 1);
+	alt = !alt;
+	chr_play(c, n, true);
 }
 
 bool chr_is_singing(Character *c) {

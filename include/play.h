@@ -68,6 +68,8 @@ typedef struct {
 	Sheet shNotes, shSplash, shPopup, shCountdown, shIcon[2];
 	float countdownAlpha;
 	int countdownFrame;
+	bool hideOpp;
+	Character abot;         // Nene's speaker
 } PlayState;
 
 extern PlayState P;

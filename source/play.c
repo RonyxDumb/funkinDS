@@ -123,6 +123,34 @@ static int pbot1_score(float ms) {
 	return (int)(500 * factor + 9);
 }
 
+// note kinds: scripted character reactions (all characters react to every
+// note of that kind), then the singer's default behaviour
+static bool kind_anim(Character *c, int kind, bool hit) {
+	if (!c || !kind) return false;
+	for (int i = 0; i < kind_anim_count; i++) {
+		const KindAnim *k = &kind_anims[i];
+		if (k->kind != kind || strcmp(k->chr, c->id)) continue;
+		const char *a = hit ? k->hit : k->miss;
+		if (!a || !*a) return false;
+		chr_play_any(c, a);
+		c->holdTimer = 0;
+		return true;
+	}
+	return false;
+}
+
+static void note_react(Character *singer, int kind, int dir, bool hit) {
+	bool handled = false;
+	for (int r = 0; r < 3; r++)
+		if (kind_anim(P.chars[r], kind, hit) && P.chars[r] == singer) handled = true;
+	if (handled || !singer) return;
+	const char *k = kind < NOTE_KIND_COUNT ? note_kinds[kind] : "";
+	if (!strcmp(k, "noanim")) return;
+	if (!hit) { chr_sing(singer, dir, true, NULL); return; }
+	if (!strcmp(k, "mom")) chr_sing(singer, dir, false, "alt");
+	else chr_sing(singer, dir, false, NULL);
+}
+
 static void note_hit(int idx, Note *n) {
 	Strum *s = &P.sl[idx];
 	Character *c = sl_char(idx);
@@ -142,15 +170,7 @@ static void note_hit(int idx, Note *n) {
 		if (r == 0) splash_show(n->dir);
 		vocals(true);
 	}
-	if (c) {
-		switch (n->kind) {
-		case KIND_NOANIM: break;
-		case KIND_ALT: chr_sing(c, n->dir, false, "alt"); break;
-		case KIND_UGH: chr_play(c, "ugh", true); break;
-		case KIND_HEH: chr_play(c, "hehPrettyGood", true); break;
-		default: chr_sing(c, n->dir, false, NULL); break;
-		}
-	}
+	note_react(c, n->kind, n->dir, true);
 	s->anim[n->dir] = 2;
 	s->animTime[n->dir] = 0;
 	s->cpuRelease[n->dir] = n->t + (n->len > 0 ? n->len : 0) + P.crochet / 4;
@@ -166,8 +186,7 @@ static void note_miss(int idx, Note *n, int dir) {
 	P.misses++;
 	audio_sfx(SFX_MISSNOTE1 + rand() % 3, frand_range(0.5f, 0.6f));
 	vocals(false);
-	Character *c = sl_char(idx);
-	if (c) chr_sing(c, dir, true, NULL);
+	note_react(sl_char(idx), n ? n->kind : 0, dir, false);
 	if (n) n->state = NS_MISSED;
 	subDirty = true;
 }
@@ -196,7 +215,7 @@ static void update_notes(int idx, float dt) {
 				}
 				// keep singing while holding
 				Character *c = sl_char(idx);
-				if (c && n->kind != KIND_NOANIM && chr_is_singing(c)) c->holdTimer = 0;
+				if (c && chr_is_singing(c)) c->holdTimer = 0;
 				if (pos >= end) n->state = NS_DONE;
 			} else {
 				// released too early (hold dropped)
@@ -335,7 +354,7 @@ void play_enter(void) {
 	memset(&P, 0, sizeof(P));
 	P.info = &song_info[g_song];
 	char path[64];
-	snprintf(path, sizeof(path), "/song/%s-%s.cht", P.info->id, diff_name(g_diff));
+	snprintf(path, sizeof(path), "/song/%s-%s.cht", P.info->tag, diff_name(g_diff));
 	u32 size;
 	P.chartData = file_load(path, &size);
 	if (!P.chartData) { state_switch(ST_MAINMENU); return; }
@@ -345,6 +364,11 @@ void play_enter(void) {
 	const ChartNote *notes = (const ChartNote *)(P.events + P.chart->nEvents);
 	strum_setup(&P.sl[0], notes, P.chart->nNotes[0], false);
 	strum_setup(&P.sl[1], notes + P.chart->nNotes[0], P.chart->nNotes[1], true);
+	// Blazin': the opponent strumline is hidden and the player one centered (songs/blazin.hxc)
+	if (!strcmp(P.info->id, "blazin")) {
+		P.hideOpp = true;
+		for (int i = 0; i < 4; i++) P.sl[0].cx[i] = 128 - 45 + i * LANE_W;
+	}
 	P.scrollSpeed = P.chart->speed;
 	P.health = 1;
 	P.stageZoom = P.info->stage->zoom;
@@ -368,6 +392,16 @@ void play_enter(void) {
 	for (int r = 0; r < 3; r++) if (P.chars[r]) chr_place(P.chars[r], &st->chars[stageIdx[r]]);
 	// Tutorial: Girlfriend is the opponent, placed where she normally stands
 	if (!P.info->gf[0] && P.chars[ROLE_DAD]) chr_place(P.chars[ROLE_DAD], &st->chars[1]);
+	// Nene stands on A-Bot (scripts/characters/nene.hxc setupAbot)
+	Character *gfc = P.chars[ROLE_GF];
+	if (gfc && !strncmp(gfc->id, "nene", 4) && strcmp(gfc->id, "nene-pixel")) {
+		if (chr_load(&P.abot, strstr(gfc->id, "dark") ? "abot_dark" : "abot", ROLE_OTHER)) {
+			P.abot.x = gfc->x - 95 + gfc->hdr->gx;
+			P.abot.y = gfc->y + 384 + gfc->hdr->gy;
+			P.abot.sfx = gfc->sfx;
+			P.abot.sfy = gfc->sfy;
+		}
+	}
 	stage_load(st);
 	sheet_load(&P.shNotes, P.skin->sheet, false);
 	sheet_load(&P.shSplash, P.splashDef->sheet, false);
@@ -400,6 +434,7 @@ void play_enter(void) {
 void play_leave(void) {
 	audio_stop();
 	for (int r = 0; r < 3; r++) chr_unload(&P.chr[r]);
+	chr_unload(&P.abot);
 	chr_slots_reset();
 	stage_unload();
 	sheet_unload(&P.shNotes);
@@ -499,29 +534,42 @@ static void update_pause(void) {
 // ---------------------------------------------------------------------------
 // song end (PlayState.endSong)
 // ---------------------------------------------------------------------------
+static void add_results(void) {
+	Results *r = &g_results;
+	r->score += P.score;
+	r->misses += P.misses;
+	if (P.maxCombo > r->maxCombo) r->maxCombo = P.maxCombo;
+	for (int i = 0; i < 4; i++) r->judged[i] += P.judged[i];
+	r->notes += P.sl[0].n;
+}
+
 static void end_song(void) {
 	P.ended = true;
 	audio_stop_music();
-	if (!save.botplay && P.score > save.songScore[g_song][g_diff]) save.songScore[g_song][g_diff] = P.score;
+	if (!g_storyMode || g_weekPos == 0) memset(&g_results, 0, sizeof(g_results));
+	add_results();
 	if (g_storyMode) {
-		g_weekScore += P.score;
 		const WeekInfo *w = &week_info[g_week];
 		g_weekPos++;
 		if (g_weekPos < w->nSongs) {
 			g_song = w->songs[g_weekPos];
-			save_write();
 			state_switch(ST_PLAY);
 			return;
 		}
-		if (!save.botplay && g_weekScore > save.weekScore[g_week][g_diff]) save.weekScore[g_week][g_diff] = g_weekScore;
-		save_write();
-		menu_music(false);
-		state_switch(ST_STORY);
+		snprintf(g_results.title, sizeof(g_results.title), "%s", w->name);
+		if (!save.botplay && g_results.score > save.weekScore[g_week][g_diff]) {
+			save.weekScore[g_week][g_diff] = g_results.score;
+			g_results.newBest = true;
+		}
 	} else {
-		save_write();
-		menu_music(false);
-		state_switch(ST_FREEPLAY);
+		snprintf(g_results.title, sizeof(g_results.title), "%s", P.info->name);
+		if (!save.botplay && P.score > save.songScore[g_song][g_diff]) {
+			save.songScore[g_song][g_diff] = P.score;
+			g_results.newBest = true;
+		}
 	}
+	save_write();
+	state_switch(ST_RESULTS);
 }
 
 // ---------------------------------------------------------------------------
@@ -558,8 +606,8 @@ void play_update(float dt) {
 		if (P.songPos >= 0) {
 			P.started = true;
 			char a[48], b[48];
-			snprintf(a, sizeof(a), "nitro:/snd/%s_inst.adp", P.info->id);
-			snprintf(b, sizeof(b), "nitro:/snd/%s_voices.adp", P.info->id);
+			snprintf(a, sizeof(a), "nitro:/snd/%s_inst.adp", P.info->tag);
+			snprintf(b, sizeof(b), "nitro:/snd/%s_voices.adp", P.info->tag);
 			audio_play_song(a, b);
 			P.songPos = 0;
 		}
@@ -591,6 +639,7 @@ void play_update(float dt) {
 		int from = beat > P.curBeat && P.curBeat != -1000 ? P.curBeat + 1 : beat;
 		for (int b = from; b <= beat; b++) {
 			stage_beat(b);
+			if (P.abot.loaded) chr_play(&P.abot, "idle", true);
 			P.iconScale[0] = P.iconScale[1] = 1.2f;
 		}
 		P.curBeat = beat;
@@ -622,6 +671,7 @@ void play_update(float dt) {
 	bool holding = false;
 	for (int d = 0; d < 4; d++) holding |= (kHeld & laneKeys[d]) != 0 || (save.botplay && botHoldEnd[d] > P.songPos);
 	for (int r = 0; r < 3; r++) if (P.chars[r]) chr_update(P.chars[r], dt, P.stepMs, holding);
+	if (P.abot.loaded) chr_update(&P.abot, dt, P.stepMs, false);
 	stage_update(dt);
 
 	// camera (PlayState.update + FlxCamera follow)
@@ -777,7 +827,7 @@ void play_draw(void) {
 		}
 	}
 	draw_healthbar();
-	draw_strum(1);
+	if (!P.hideOpp) draw_strum(1);
 	draw_strum(0);
 	if (P.countdownAlpha > 0.01f && P.shCountdown.loaded)
 		sheet_draw(&P.shCountdown, P.countdownFrame, 128, 96, KDS * 0.6f, WHITE, A31(P.countdownAlpha));

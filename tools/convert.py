@@ -111,7 +111,7 @@ def parse_packer(txt, png):
 # ===========================================================================
 CHAR_TS = 0.165        # texels per world unit (non pixel characters)
 DEAD_ANIMS = ('firstDeath', 'deathLoop', 'deathConfirm')
-SKIP_ANIM = re.compile(r'^(fakeoutDeath|combo\d+|drop\d+|.*-censor)$')
+SKIP_ANIM = re.compile(r'^(fakeoutDeath|combo\d+|drop\d+|.*-censor|.*-explosion|burp.*|intro\d|laughCutscene|shit|bfCatch)$')
 
 
 class Src:
@@ -142,11 +142,15 @@ class Src:
         if self.kind == 'atlas':
             if animtype == 'symbol':
                 tl = self.atlas.symbols.get(prefix)
+                if tl is None and prefix == self.atlas.main.name:
+                    tl = self.atlas.main
                 if tl is None:
                     return []
                 fr = [(tl, i) for i in range(tl.count)]
             else:
                 lf = self.atlas.label_frames(prefix)
+                if lf is None:
+                    lf = next((v for k, v in self.atlas.main.labels().items() if k.strip() == prefix.strip()), None)
                 if lf is None:
                     return []
                 fr = [(self.atlas.main, i) for i in lf]
@@ -168,6 +172,8 @@ class Src:
 
 
 def frame_key(h):
+    if h[0] == 'i':
+        return ('i', h[1])
     if h[0] == 'a':
         src, tl, i = h[1], h[2], h[3]
         return ('a', id(src), item_key(src.atlas.items(tl, i)))
@@ -178,6 +184,8 @@ def frame_key(h):
 def render_frame(h, scale, ts, flip, nearest):
     """-> (img, dx, dy, ww, wh) with (dx, dy) world offset of the top-left."""
     k = scale * ts       # texels per frame pixel
+    if h[0] == 'i':      # pre-rendered: (tag, key, img, dx, dy, ww, wh)
+        return h[2], h[3], h[4], h[5], h[6]
     if h[0] == 'a':
         src, tl, i = h[1], h[2], h[3]
         b = src.bounds
@@ -443,6 +451,7 @@ def crop_window(r, ts, w, px, py):
 
 def convert_stage(sid):
     d = jload(os.path.join(DATA, 'stages', sid + '.json'))
+    bsid = sid.replace('Erect', '')      # the erect stages share the base stage overrides
     lib = d.get('directory', 'shared')
     zoom = float(d.get('cameraZoom', 1.0))
     # world area the camera can show (stage camera focus range, zoomed out a bit)
@@ -467,15 +476,16 @@ def convert_stage(sid):
     zmin = zoom * 0.8 * 0.8      # DS_VIEW in play.c
 
     def window(q):
-        if (sid, q['name']) in NOCROP:
+        if (bsid, q['name']) in NOCROP:
             return (-1e9, -1e9, 1e9, 1e9)
         sfx, sfy = q['sfx'], q['sfy']
         return ((cx0 - 640) * sfx + 640 - 480 / zmin, (cy0 - 360) * sfy + 360 - 360 / zmin,
                 (cx1 - 640) * sfx + 640 + 480 / zmin, (cy1 - 360) * sfy + 360 + 360 / zmin)
     props = []
     for p in d['props']:
-        if (sid, p['name']) in PROP_SKIP:
-            continue
+        if (bsid, p['name']) in PROP_SKIP or p['name'].endswith('_lightmap') or \
+                p['name'] in ('foregroundMultiply', 'additionalLighten', 'fog'):
+            continue   # blend-mode overlays (add / multiply) the DS cannot draw
         sc = p.get('scale', [1, 1])
         if not isinstance(sc, list):
             sc = [sc, sc]
@@ -494,7 +504,7 @@ def convert_stage(sid):
             q['src'], q['anims'] = prop_frames(p, lib)
             if not q['anims']:
                 continue
-            stride = PROP_STRIDE.get((sid, p['name']), 1)
+            stride = PROP_STRIDE.get((bsid, p['name']), 1)
             if stride > 1:
                 q['anims'] = {k: (v[0][::stride], v[1] / stride) + v[2:] for k, v in q['anims'].items()}
         else:
@@ -504,7 +514,14 @@ def convert_stage(sid):
             except FileNotFoundError:
                 print('  stage %s: missing %s' % (sid, p['assetPath']))
                 continue
-        if (sid, q['name']) in PROP_C16:
+            ang = float(p.get('angle', 0) or 0)
+            if ang:
+                im0 = q['img']
+                r = im0.rotate(-ang, resample=Image.BICUBIC, expand=True)
+                q['x'] -= (r.width - im0.width) / 2 * q['sx']
+                q['y'] -= (r.height - im0.height) / 2 * q['sy']
+                q['img'] = r
+        if (bsid, q['name']) in PROP_C16:
             q['c16'] = True
         elif q['pixel'] and q['kind'] != 'solid':
             im0 = q['img'] if q['kind'] == 'static' else getattr(q['src'], 'img', None)
@@ -671,8 +688,9 @@ EASES = ['linear', 'quad', 'cube', 'quart', 'quint', 'sine', 'circ', 'expo', 'ba
          'elastic', 'bounce']
 EV_TYPES = ['FocusCamera', 'ZoomCamera', 'SetCameraBop', 'PlayAnimation', 'ScrollSpeed']
 NOTE_KINDS = {'noanim': 1, 'mom': 2, 'ugh': 3, 'hehPrettyGood': 4}
-WEEKS = ['tutorial', 'week1', 'week2', 'week3', 'week4', 'week5', 'week6', 'week7']
-DIFFS = ['easy', 'normal', 'hard']
+WEEKS = ['tutorial', 'week1', 'week2', 'week3', 'week4', 'week5', 'week6', 'week7', 'weekend1']
+DIFFS = ['easy', 'normal', 'hard', 'erect', 'nightmare']
+EXTRA_SONGS = ['spaghetti']       # songs that are not in a week (freeplay only)
 
 
 def ease_code(ease, d):
@@ -690,8 +708,20 @@ def ease_code(ease, d):
     return 0 if i == 0 else i * 3 + {'In': 0, 'Out': 1, 'InOut': 2}[dr]
 
 
-def convert_chart(song, diff, meta):
-    d = jload(os.path.join(DATA, 'songs', song, '%s-chart.json' % song))
+KINDS = ['']
+
+
+def kind_index(k):
+    k = k or ''
+    if k in ('', 'normal'):
+        return 0
+    if k not in KINDS:
+        KINDS.append(k)
+    return KINDS.index(k)
+
+
+def convert_chart(song, var, tag, diff, meta):
+    d = jload(os.path.join(DATA, 'songs', song, '%s-chart%s.json' % (song, '-' + var if var else '')))
     notes = d['notes'].get(diff)
     if notes is None:
         return False
@@ -735,7 +765,7 @@ def convert_chart(song, diff, meta):
         if dd < 0 or dd > 7:
             continue
         side = 0 if dd < 4 else 1
-        k = NOTE_KINDS.get(nt.get('k') or '', 0)
+        k = kind_index(nt.get('k'))
         lanes[side].append((float(nt['t']), float(nt.get('l', 0) or 0), dd & 3, k))
     for l in lanes:
         l.sort()
@@ -747,7 +777,7 @@ def convert_chart(song, diff, meta):
     for l in lanes:
         for t, ln, dd, k in l:
             out += struct.pack('<ffBBH', t, ln, dd, k, 0)
-    with open(outpath('song', '%s-%s.cht' % (song, diff)), 'wb') as fo:
+    with open(outpath('song', '%s-%s.cht' % (tag, diff)), 'wb') as fo:
         fo.write(out)
     return True
 
@@ -757,45 +787,119 @@ STAGE_CHARS = []  # (stage, role, chr tag)
 NEED_CHARS = {}   # tag -> (cid, player)
 
 
+PLAYERS = ['bf', 'pico']
+
+
+def song_entry(sid, var, week):
+    tag = sid + ('-' + var if var else '')
+    meta = jload(os.path.join(DATA, 'songs', sid, '%s-metadata%s.json' % (sid, '-' + var if var else '')))
+    pd = meta['playData']
+    c = pd['characters']
+    mask = 0
+    for i, df in enumerate(DIFFS):
+        if df in pd['difficulties'] and convert_chart(sid, var, tag, df, meta):
+            mask |= 1 << i
+    info = dict(id=sid, tag=tag, var=var, name=meta['songName'], artist=meta.get('artist', ''), stage=pd['stage'],
+                style=pd.get('noteStyle', 'funkin'), player=c.get('player', 'bf'), gf=c.get('girlfriend') or '',
+                opp=c.get('opponent', 'dad'), mask=mask, week=week, bpm=meta['timeChanges'][0]['bpm'],
+                inst=c.get('instrumental', ''), pvoc=c.get('playerVocals') or [], ovoc=c.get('opponentVocals') or [],
+                vars=pd.get('songVariations') or [])
+    NEED_CHARS[info['player'] + '_p'] = (info['player'], True)
+    NEED_CHARS[info['opp']] = (info['opp'], False)
+    if info['gf']:
+        NEED_CHARS[info['gf']] = (info['gf'], False)
+    SONGS.append(info)
+    STAGE_CHARS.append((info['stage'], 'bf', info['player'] + '_p'))
+    STAGE_CHARS.append((info['stage'], 'dad' if info['gf'] else 'gf', info['opp']))
+    if info['gf']:
+        STAGE_CHARS.append((info['stage'], 'gf', info['gf']))
+    print('song %-24s %-24s %s/%s/%s  diffs %d' % (tag, pd['stage'], info['player'], info['gf'], info['opp'], mask))
+    return len(SONGS) - 1
+
+
 def collect_songs():
     weeks = []
+    order = []
     for w in WEEKS:
         lv = jload(os.path.join(DATA, 'levels', w + '.json'))
         ids = []
         for s in lv['songs']:
-            meta = jload(os.path.join(DATA, 'songs', s, '%s-metadata.json' % s))
-            pd = meta['playData']
-            c = pd['characters']
-            mask = 0
-            for i, df in enumerate(DIFFS):
-                if df in pd['difficulties'] and convert_chart(s, df, meta):
-                    mask |= 1 << i
-            info = dict(id=s, name=meta['songName'], artist=meta.get('artist', ''), stage=pd['stage'],
-                        style=pd.get('noteStyle', 'funkin'), player=c.get('player', 'bf'), gf=c.get('girlfriend') or '',
-                        opp=c.get('opponent', 'dad'), mask=mask, week=len(weeks),
-                        bpm=meta['timeChanges'][0]['bpm'])
-            NEED_CHARS[info['player'] + '_p'] = (info['player'], True)
-            NEED_CHARS[info['opp']] = (info['opp'], False)
-            if info['gf']:
-                NEED_CHARS[info['gf']] = (info['gf'], False)
-            ids.append(len(SONGS))
-            SONGS.append(info)
-            STAGE_CHARS.append((info['stage'], 'bf', info['player'] + '_p'))
-            STAGE_CHARS.append((info['stage'], 'dad' if info['gf'] else 'gf', info['opp']))
-            if info['gf']:
-                STAGE_CHARS.append((info['stage'], 'gf', info['gf']))
-            print('song %-18s %-18s %s/%s/%s  diffs %d' % (s, pd['stage'], info['player'], info['gf'], info['opp'], mask))
+            ids.append(song_entry(s, '', len(weeks)))
+            order.append((s, len(weeks)))
         weeks.append(dict(id=w, name=lv['name'], songs=ids, title=lv.get('titleAsset'), props=lv.get('props', []),
                           bg=color_hex(lv.get('background', '#F9CF51'))))
+    for s in EXTRA_SONGS:
+        if os.path.exists(os.path.join(DATA, 'songs', s)):
+            order.append((s, len(weeks)))
+            song_entry(s, '', len(weeks))
+    # variations (erect / pico / bf mixes)
+    for s, w in order:
+        base = next(x for x in SONGS if x['id'] == s and x['var'] == '')
+        for v in base['vars']:
+            if os.path.exists(os.path.join(DATA, 'songs', s, '%s-metadata-%s.json' % (s, v))):
+                song_entry(s, v, w)
+    # freeplay: per song, the (entry, difficulty) options of each playable character
+    owned = {p: set(jload(os.path.join(DATA, 'players', p + '.json'))['ownedChars']) for p in PLAYERS}
+    for s, w in order:
+        opts = {p: [] for p in PLAYERS}
+        for i, e in enumerate(SONGS):
+            if e['id'] != s:
+                continue
+            p = next((q for q in PLAYERS if e['player'] in owned[q]), 'bf')
+            for d in range(len(DIFFS)):
+                if e['mask'] & (1 << d):
+                    opts[p].append((i, d))
+        FREEPLAY.append(dict(name=next(x['name'] for x in SONGS if x['id'] == s), week=w, opts=opts))
     return weeks
 
 
+FREEPLAY = []
+
+
+def emit_kind_anims():
+    """Note kinds handled by the character scripts (preload/scripts/characters/*.hxc):
+    case "<kind>": playAnimation('x') / someFunction() -> playAnimation('x')."""
+    rows = []
+    SD = os.path.join(A, 'preload', 'scripts', 'characters')
+    for f in sorted(os.listdir(SD)):
+        chrid = f[:-4]
+        if not any(t == chrid or t == chrid + '_p' for t in CHR_INFO):
+            continue
+        src = open(os.path.join(SD, f)).read()
+        funcs = {}
+        for m in re.finditer(r'function (\w+)\([^)]*\)[^{]*\{(.*?)\n  \}', src, re.S):
+            funcs[m.group(1)] = re.findall(r"playAnimation\('([^']+)'", m.group(2))
+        res = {}
+        for sect, slot in (('onNoteHit', 0), ('onNoteMiss', 1)):
+            m = re.search(r'function ' + sect + r'\(.*?\n  \}', src, re.S)
+            if not m:
+                continue
+            body = m.group(0)
+            for c in re.finditer(r'case "([\w-]+)":(.*?)(?=\n\s*case |\n\s*default|\n    \})', body, re.S):
+                kind = c.group(1)
+                if kind not in KINDS:
+                    continue
+                anims = re.findall(r"playAnimation\('([^']+)'", c.group(2))
+                if not anims:
+                    for fn in re.findall(r'(\w+)\(\);', c.group(2)):
+                        if funcs.get(fn):
+                            anims = funcs[fn]
+                            break
+                if anims:
+                    res.setdefault(kind, ['', ''])[slot] = anims[0]
+        for kind, (hit, miss) in res.items():
+            rows.append('{%s,%d,%s,%s}' % (cstr(chrid), KINDS.index(kind), cstr(hit), cstr(miss)))
+    C_OUT.append('const KindAnim kind_anims[] = {%s};\nconst int kind_anim_count = %d;' % (','.join(rows) or '{0}', len(rows)))
+    H_OUT.append('extern const KindAnim kind_anims[];\nextern const int kind_anim_count;')
+    print('kind animations:', len(rows))
+
+
 def emit_songs(weeks, stage_ids):
-    H_OUT.append('#define SONG_COUNT %d\n#define WEEK_COUNT %d' % (len(SONGS), len(weeks)))
+    H_OUT.append('#define SONG_COUNT %d\n#define WEEK_COUNT %d\n#define DIFF_COUNT %d' % (len(SONGS), len(weeks), len(DIFFS)))
     rows = []
     for s in SONGS:
-        rows.append('{%s,%s,%s,&stage_%s,%d,%s,%s,%s,%s,%s,%d,%d}' % (
-            cstr(s['id']), cstr(s['name']), cstr(s['artist']), cid(s['stage']).lower(), 1 if s['style'] == 'pixel' else 0,
+        rows.append('{%s,%s,%s,%s,&stage_%s,%d,%s,%s,%s,%s,%s,%d,%d}' % (
+            cstr(s['id']), cstr(s['tag']), cstr(s['name']), cstr(s['artist']), cid(s['stage']).lower(), 1 if s['style'] == 'pixel' else 0,
             cstr(s['player'] + '_p'), cstr(s['gf']), cstr(s['opp']), cstr(CHR_INFO[s['player'] + '_p']['icon']),
             cstr(CHR_INFO[s['opp']]['icon']), s['mask'], s['week']))
     C_OUT.append('const SongInfo song_info[SONG_COUNT] = {%s};' % ',\n'.join(rows))
@@ -804,6 +908,16 @@ def emit_songs(weeks, stage_ids):
         rows.append('{%s,%s,%d,{%s},0x%06X}' % (cstr(w['id']), cstr(w['name']), len(w['songs']),
                                                ','.join(str(x) for x in w['songs']), w['bg']))
     C_OUT.append('const WeekInfo week_info[WEEK_COUNT] = {%s};' % ',\n'.join(rows))
+    rows = []
+    for f in FREEPLAY:
+        o = [f['opts'][p][:12] for p in PLAYERS]
+        rows.append('{%s,%d,{%d,%d},{%s}}' % (cstr(f['name']), f['week'], len(o[0]), len(o[1]), ','.join(
+            '{%s}' % ','.join(str((i << 3) | d) for i, d in x) if x else '{0}' for x in o)))
+    H_OUT.append('#define FREEPLAY_COUNT %d' % len(FREEPLAY))
+    C_OUT.append('const FreeplaySong freeplay_songs[FREEPLAY_COUNT] = {%s};' % ',\n'.join(rows))
+    H_OUT.append('extern const FreeplaySong freeplay_songs[FREEPLAY_COUNT];')
+    C_OUT.append('const char *const note_kinds[] = {%s};' % ','.join(cstr(k) for k in KINDS))
+    H_OUT.append('#define NOTE_KIND_COUNT %d\nextern const char *const note_kinds[];' % len(KINDS))
     H_OUT.append('extern const SongInfo song_info[SONG_COUNT];\nextern const WeekInfo week_info[WEEK_COUNT];')
     # character table (positions / camera data used before the .chr is loaded)
     rows = []
@@ -839,19 +953,36 @@ def convert_audio():
     S = os.path.join(A, 'songs')
     for s in SONGS:
         d = os.path.join(S, s['id'])
-        inst = os.path.join(d, 'Inst.ogg')
-        vp = os.path.join(d, 'Voices-%s.ogg' % s['player'])
-        vo = os.path.join(d, 'Voices-%s.ogg' % s['opp'])
-        if not os.path.exists(vp):
-            vp = os.path.join(d, 'Voices.ogg') if os.path.exists(os.path.join(d, 'Voices.ogg')) else None
+        v = s['var']
+        inst = os.path.join(d, 'Inst%s.ogg' % ('-' + s['inst'] if s['inst'] else ''))
+        if not os.path.exists(inst):
+            inst = os.path.join(d, 'Inst.ogg')
+
+        def voice(ids, fallback):
+            cands = []
+            for i in ids + [fallback]:
+                for nm in (i, i.split('-')[0]):
+                    cands += ['Voices-%s-%s.ogg' % (nm, v)] if v else []
+                    cands += ['Voices-%s.ogg' % nm]
+            for c in cands:
+                if os.path.exists(os.path.join(d, c)):
+                    return os.path.join(d, c)
+            return None
+        vp = voice(s['pvoc'], s['player'])
+        vo = voice(s['ovoc'], s['opp'])
+        if vp is None and not s['pvoc'] and os.path.exists(os.path.join(d, 'Voices.ogg')):
+            vp = os.path.join(d, 'Voices.ogg')
+        dst = 'snd/%s_inst.adp' % s['tag']
+        if os.path.exists(outpath(dst)) and '--redo-audio' not in OPTS:
+            continue
         # the opponent voices are mixed into the instrumental (one stream less)
-        if os.path.exists(vo):
-            adpcm([inst, vo], 'snd/%s_inst.adp' % s['id'], '[0:a][1:a]amix=inputs=2:normalize=0')
+        if vo:
+            adpcm([inst, vo], dst, '[0:a][1:a]amix=inputs=2:normalize=0')
         else:
-            adpcm([inst], 'snd/%s_inst.adp' % s['id'])
+            adpcm([inst], dst)
         if vp:
-            adpcm([vp], 'snd/%s_voices.adp' % s['id'])
-        print('audio', s['id'])
+            adpcm([vp], 'snd/%s_voices.adp' % s['tag'])
+        print('audio', s['tag'], os.path.basename(inst), vp and os.path.basename(vp), vo and os.path.basename(vo))
     P = os.path.join(A, 'preload', 'music')
     adpcm([os.path.join(P, 'freakyMenu', 'freakyMenu.ogg')], 'snd/menu.adp')
     adpcm([os.path.join(P, 'stayFunky', 'stayFunky.ogg')], 'snd/results.adp')
@@ -1188,6 +1319,91 @@ def convert_menus(weeks):
     H_OUT.append('extern const s16 alphabet_map[95][2];')
 
 
+MENU_TS = 0.2 * 0.85        # texels per menu unit (the 1280x720 view is 256 px wide)
+
+
+def convert_menu_atlas(name, path, anims):
+    """An Animate atlas used in a menu, as a .chr: anims = [(name, label, loop)].
+    Frames are relative to the timeline bounds; gx/gy hold the bounds origin."""
+    src = Src.get('atlas', path)
+    out = []
+    for an, label, loop in anims:
+        hs = src.anim_frames(label, None)
+        if not hs:
+            print('  %s: no label %s' % (name, label))
+            continue
+        out.append(dict(name=an, fps=24.0, loop=loop, offx=0, offy=0, frames=hs, src=src))
+    b = src.bounds
+    info = dict(W=b[2], H=b[3], gx=b[0], gy=b[1], camx=0, camy=0, sing=8.0, dance=0.0)
+    write_chr(name, out, info, 1.0, fit_ts(out, 1.0, MENU_TS, max_area=128 * 128), False, False)
+
+
+def convert_abot():
+    """Nene's A-Bot speaker (scripts/characters/nene.hxc): the abotSystem atlas
+    with stereoBG behind it, as a .chr drawn behind Nene."""
+    for tag, path in (('abot', 'shared:characters/abot/abotSystem'), ('abot_dark', 'shared:characters/abot/dark/abotSystem')):
+        try:
+            src = Src.get('atlas', path)
+        except FileNotFoundError:
+            continue
+        ts = CHAR_TS
+        bg = Image.open(resolve('shared:characters/abot/stereoBG') + '.png').convert('RGBA')
+        b = src.bounds
+        frames = []
+        for i in range(src.atlas.main.count):
+            r = src.atlas.render(src.atlas.items(src.atlas.main, i), ts, 0, 0)
+            # canvas in texels from world (0, 0) = abot position (flixel frame = bounds)
+            X0 = int(min(150 * ts, r[1] if r else 0)) - 1
+            Y0 = int(min(30 * ts, r[2] if r else 0)) - 1
+            bgs = scaled(bg, ts)
+            W = int(max(150 * ts + bgs.width, (r[1] + r[0].width) if r else 0)) - X0 + 2
+            H = int(max(30 * ts + bgs.height, (r[2] + r[0].height) if r else 0)) - Y0 + 2
+            can = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+            can.alpha_composite(bgs, (int(150 * ts) - X0, int(30 * ts) - Y0))
+            if r:
+                can.alpha_composite(r[0], (r[1] - X0, r[2] - Y0))
+            frames.append(('i', '%s%d' % (tag, i), can, X0 / ts - b[0], Y0 / ts - b[1], W / ts, H / ts))
+        info = dict(W=b[2], H=b[3], gx=b[0], gy=b[1], camx=0, camy=0, sing=8.0, dance=1.0)
+        write_chr(tag, [dict(name='idle', fps=24.0, loop=False, offx=0, offy=0, frames=frames, src=src)], info, 1.0, ts, False, False)
+
+
+def convert_freeplay_menus():
+    P = os.path.join(A, 'preload', 'images')
+    for pl in PLAYERS:
+        convert_menu_atlas('dj_' + pl, 'preload:freeplay/freeplay-' + ('boyfriend' if pl == 'bf' else pl),
+                           [('intro', 'Intro', False), ('idle', 'Idle', True), ('confirm', 'Confirm', False),
+                            ('fistPump', 'Fist Pump', False), ('loss', 'Fist Pump Loss', False)])
+        convert_menu_atlas('chill_' + pl, 'preload:charSelect/%sChill' % pl,
+                           [('idle', 'idle', True), ('select', 'select', False), ('slidein', 'slidein', False)])
+        sh = MSheet('fpbg_' + pl)
+        im = Image.open(os.path.join(P, 'freeplay', 'freeplayBGweek1-%s.png' % pl)).convert('RGBA')
+        sh.image('bg', im, 720.0 / im.height, tiled=True, trimit=False)
+        sh.build()
+        sh = MSheet('csname_' + pl)
+        nt = os.path.join(P, 'charSelect', '%sNametag.png' % ('boyfriend' if pl == 'bf' else pl))
+        if os.path.exists(nt):
+            sh.image('tag', Image.open(nt).convert('RGBA'), 1.0)
+        sh.build()
+    sh = MSheet('charselect')
+    for nm, fn, bake in (('bg', 'charSelectBG.png', 1.0), ('stage', 'charSelectStage.png', 1.0), ('curtains', 'curtains.png', 1.0)):
+        im = Image.open(os.path.join(P, 'charSelect', fn)).convert('RGBA')
+        sh.image(nm, im, bake, tiled=True)
+    sh.build()
+    for d in DIFFS:
+        f = os.path.join(P, 'freeplay', 'freeplay%s.png' % d)
+        if os.path.exists(f):
+            s2 = MSheet('fpdiff_' + d)
+            im = Image.open(f).convert('RGBA')
+            if os.path.exists(f[:-4] + '.xml'):      # animated (nightmare): first frame
+                im2, fr = parse_sparrow(f[:-4] + '.xml', f)
+                im = full_frame(im2, fr[0])
+            s2.image('main', im, 1.0)
+            s2.build()
+    C_OUT.append('const SheetDef *const fpdiff_sheets[%d] = {%s};' % (len(DIFFS), ','.join(
+        '&sheet_fpdiff_' + d if os.path.exists(os.path.join(P, 'freeplay', 'freeplay%s.png' % d)) else 'NULL' for d in DIFFS)))
+    H_OUT.append('extern const SheetDef *const fpdiff_sheets[%d];' % len(DIFFS))
+
+
 def convert_fonts_all():
     vcr = os.path.join(A, 'fonts', 'vcr.ttf')
     SH.FONTS[:] = [('vcr8', vcr, 8, 0), ('vcr8o', vcr, 8, 1), ('vcr12', vcr, 12, 0), ('vcr12o', vcr, 12, 1),
@@ -1209,11 +1425,14 @@ def main():
     for sid in stage_ids:
         convert_stage(sid)
     emit_songs(weeks, stage_ids)
+    emit_kind_anims()
     for ns in ('funkin', 'pixel'):
         convert_noteskin(ns)
     convert_popups()
     convert_icons()
     convert_menus(weeks)
+    convert_freeplay_menus()
+    convert_abot()
     convert_fonts_all()
     if '--no-audio' not in OPTS:
         convert_audio()

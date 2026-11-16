@@ -22,6 +22,25 @@ def _load_json(path):
         return json.load(f)
 
 
+# verbose (non optimized) export -> compact keys
+_LONG = {'ANIMATION': 'AN', 'SYMBOL_DICTIONARY': 'SD', 'Symbols': 'S', 'SYMBOL_name': 'SN', 'TIMELINE': 'TL',
+         'LAYERS': 'L', 'Layer_name': 'LN', 'Layer_type': 'LT', 'Frames': 'FR', 'index': 'I', 'duration': 'DU',
+         'elements': 'E', 'SYMBOL_Instance': 'SI', 'ATLAS_SPRITE_instance': 'ASI', 'name': 'N', 'firstFrame': 'FF',
+         'loop': 'LP', 'symbolType': 'ST', 'Matrix3D': 'M3D', 'transformationPoint': 'TRP', 'color': 'C', 'mode': 'M',
+         'metadata': 'MD', 'framerate': 'FRT', 'Instance_Name': 'IN', 'RedMultiplier': 'RM', 'redMultiplier': 'RM',
+         'greenMultiplier': 'GM', 'blueMultiplier': 'BM', 'alphaMultiplier': 'AM', 'redOffset': 'RO',
+         'greenOffset': 'GO', 'blueOffset': 'BO', 'AlphaOffset': 'AO', 'alphaOffset': 'AO', 'brightness': 'BRT',
+         'tintMultiplier': 'TM', 'tintColor': 'TC', 'StageInstance': 'STI', 'Matrix': 'MX'}
+
+
+def _compact(o):
+    if isinstance(o, dict):
+        return {_LONG.get(k, k): _compact(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_compact(v) for v in o]
+    return o
+
+
 def _matrix(e):
     m = e.get('MX')
     if m is not None:
@@ -123,11 +142,17 @@ class Atlas:
     def __init__(self, folder):
         self.folder = folder
         d = _load_json(os.path.join(folder, 'Animation.json'))
+        if 'AN' not in d:
+            d = _compact(d)
         self.symbols = {}
         for s in d.get('SD', {}).get('S', []):
             self.symbols[s['SN']] = Timeline(s['SN'], s['TL'])
         an = d['AN']
+        if 'TL' not in an and 'STI' in an:   # main timeline given as a stage instance of a symbol
+            an['TL'] = self.symbols[an['STI']['SI']['SN']].__dict__ and {'L': []}
         self.main = Timeline(an.get('SN', an.get('N', 'main')), an['TL'])
+        if not self.main.layers and 'STI' in an:
+            self.main = self.symbols[an['STI']['SI']['SN']]
         self.fps = float(d.get('MD', {}).get('FRT', 24))
         # spritemaps
         self.sprites = {}

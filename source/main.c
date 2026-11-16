@@ -16,6 +16,7 @@ int g_weekPos = 0;
 int g_weekScore = 0;
 int g_optionsReturn = ST_MAINMENU;
 bool g_titleSeen = false;
+Results g_results;
 int perf_drops, perf_frames;
 
 Save save;
@@ -30,11 +31,13 @@ static const StateDef states[ST_COUNT] = {
 	[ST_OPTIONS] = { options_enter, options_update, options_draw, options_leave },
 	[ST_PLAY] = { play_enter, play_update, play_draw, play_leave },
 	[ST_GAMEOVER] = { gameover_enter, gameover_update, gameover_draw, gameover_leave },
+	[ST_CHARSELECT] = { charselect_enter, charselect_update, charselect_draw, charselect_leave },
+	[ST_RESULTS] = { results_enter, results_update, results_draw, results_leave },
 };
 
 const char *diff_name(int d) {
-	static const char *n[3] = { "easy", "normal", "hard" };
-	return n[d < 0 ? 0 : d > 2 ? 2 : d];
+	static const char *n[5] = { "easy", "normal", "hard", "erect", "nightmare" };
+	return n[d < 0 ? 0 : d > 4 ? 4 : d];
 }
 
 void *file_load(const char *path, u32 *size) {
@@ -56,7 +59,7 @@ void *file_load(const char *path, u32 *size) {
 // save data (FlxSave "WwcdSave" + FunkinSave highscores + options)
 // ---------------------------------------------------------------------------
 #define SAVE_PATH "fat:/data/funkinds.sav"
-#define SAVE_MAGIC 0x534B4E46   // "FNKS"
+#define SAVE_MAGIC 0x324B4E46   // "FNK2"
 
 static void save_defaults(void) {
 	memset(&save, 0, sizeof(save));
