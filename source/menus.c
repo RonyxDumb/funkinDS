@@ -35,6 +35,7 @@ static float pressTimer;
 
 void title_enter(void) {
 	sheet_load(&shTitle, &sheet_title, false);
+	font_load(FONT_VCR16O, true);
 	font_load(FONT_VCR12O, false);
 	font_load(FONT_VCR8, false);
 	menu_music(true);
@@ -77,17 +78,24 @@ void title_update(float dt) {
 	}
 }
 
+// TitleState layout (logo at -150,-100, gf at 0.4w,0.07h, text at 100,0.8h),
+// scaled to 0.22 DS px per unit so it fills more of the 4:3 screen
+#define TS_K 0.22f
+static inline float tx(float v) { return (v - 640) * TS_K + 128 + 6; }
+static inline float ty(float v) { return (v - 360) * TS_K + 96 - 6; }
+
 void title_draw(void) {
 	int f = (int)(logoT * 24 / 5);
 	if (f >= TITLE_LOGO_LEN) f = TITLE_LOGO_LEN - 1;
-	sheet_draw(&shTitle, title_logo[f], mx(-150), my(-100) + 10, MS, WHITE, 31);
+	sheet_draw(&shTitle, title_logo[f], tx(-150) + 14, ty(-100), TS_K, WHITE, 31);
 	int g = (int)(gfT * 24 / 4);
 	const u8 *seq = gfRight ? title_gf_right : title_gf_left;
 	int len = gfRight ? TITLE_GF_RIGHT_LEN : TITLE_GF_LEFT_LEN;
 	if (g >= len) g = len - 1;
-	sheet_draw(&shTitle, seq[g], mx(1280 * 0.4f), my(720 * 0.07f) + 10, MS, WHITE, 31);
+	sheet_draw(&shTitle, seq[g], tx(1280 * 0.4f), ty(720 * 0.07f), TS_K, WHITE, 31);
 	bool on = !titlePressed || ((int)(pressTimer * 20) & 1);
-	draw_centered(&shTitle, titlePressed && on ? TITLE_ENTER_PRESS : TITLE_ENTER_IDLE, 128, my(720 * 0.86f) + 8, MS, WHITE, 31);
+	float pulse = titlePressed ? 1 : 0.65f + 0.35f * sinf(logoT * 5);
+	if (on) font_draw_centered(FONT_VCR16O, 128, 170, "Press START to Begin", titlePressed ? WHITE : RGB(0x33, 0xFF, 0xFF), A31(pulse));
 	if (flash > 0) gfx_rect(0, 0, 256, 192, WHITE, A31(flash));
 }
 
@@ -187,10 +195,12 @@ void mainmenu_update(float dt) {
 }
 
 void mainmenu_draw(void) {
-	// menuBG: 1.2x, scroll factor 0.17 (DS: whole screen)
-	float sc = 0.27f;
-	float off = (mmCamY - 360) * 0.17f * sc * 0.6f;
-	sheet_draw(&shBG, 0, 128 - 1280 * sc / 2, 96 - 720 * sc / 2 - off, sc, WHITE, 31);
+	// menuBG (scrollFactor 0.17 on the camera following the selected item)
+	float sc = 0.28f;
+	float off = (mmCamY - 360) * 0.17f * sc * 0.5f;
+	sheet_draw(&shBG, 0, 128 - 1280 * sc / 2, 96 - 720 * sc / 2 - off - 4, sc, WHITE, 31);
+	// the 4 items always fit the DS screen (spacing 160, centered)
+	float k = 0.25f;
 	for (int i = 0; i < 4; i++) {
 		if (mmChosen && i != mmSel) continue;
 		if (mmChosen && ((int)(mmFlick * 12) & 1)) continue;
@@ -198,8 +208,8 @@ void mainmenu_draw(void) {
 		const u8 *seq = s ? mmSelSeq[i] : mmIdle[i];
 		int len = s ? mmSelLen[i] : mmIdleLen[i];
 		int f = ((int)(mmT * 24)) % len;
-		float y = 96 + (120 + i * 160 - mmCamY) * 0.27f;
-		draw_centered(&shMain, seq[f], 128, y, 0.27f, WHITE, 31);
+		float y = 96 + (i - 1.5f) * 160 * k * 1.12f;
+		draw_centered(&shMain, seq[f], 128, y, k, WHITE, 31);
 	}
 }
 
@@ -251,6 +261,7 @@ static void sm_load_props(void) {
 
 void story_enter(void) {
 	sheet_load(&shStory, &sheet_storymenu, false);
+	font_load(FONT_VCR8O, true);
 	font_load(FONT_VCR12O, false);
 	font_load(FONT_VCR8, false);
 	font_load(FONT_VCR8O, false);
@@ -318,12 +329,20 @@ void story_update(float dt) {
 	}
 }
 
+// StoryMenuState layout: black bar (score, level name), yellow band 56..456
+// with the props, level titles from y 480, tracks at y 556, difficulty at 870,480.
+// Horizontally the 1280 view is 256 px wide; vertically the band starts at 14.
+static inline float sy(float v) { return (v - 56) * MS + 14; }
+
 void story_draw(void) {
 	const WeekInfo *wi = &week_info[smWeek];
-	// yellow band (y 56..456)
-	gfx_rect(0, 0, 256, my(56), RGB(0, 0, 0), 31);
-	gfx_rect(0, my(56), 256, my(456), HEXC(wi->bg), 31);
-	gfx_rect(0, my(456), 256, 192, RGB(0, 0, 0), 31);
+	gfx_rect(0, 0, 256, 192, RGB(0, 0, 0), 31);
+	gfx_rect(0, sy(56), 256, sy(456), HEXC(wi->bg), 31);
+	char b[48], sc[24];
+	format_score(sc, save.weekScore[smWeek][smDiff]);
+	snprintf(b, sizeof(b), "LEVEL SCORE: %s", sc);
+	font_draw(FONT_VCR8O, 3, 3, b, WHITE, 31);
+	font_draw(FONT_VCR8O, 253 - font_width(FONT_VCR8O, wi->name), 3, wi->name, RGB(0xB0, 0xB0, 0xB0), 31);
 	const WeekProps *wp = &week_props[smWeek];
 	for (int i = 0; i < wp->n; i++) {
 		const WeekProp *p = &wp->p[i];
@@ -334,15 +353,24 @@ void story_draw(void) {
 		if (!p->dance && smChosen && i == 1 && p->lenB) { seq = p->seqB; len = p->lenB; }
 		int f = (int)(smPropT * 24 / 2);
 		if (f >= len) f = len - 1;
-		// LevelProp: x = (FlxG.width * 0.25) * (1 + i) - 150 + offsets
-		float x = 1280 * 0.25f * (1 + i) - 150 + p->offx;
-		float y = 70 + p->offy;
-		sheet_draw(&shProps[i], seq[f], mx(x), my(y), MS, WHITE, 31);
+		// LevelProp: x = offsets[0] + FlxG.width * 0.25 * index, y = offsets[1]
+		sheet_draw(&shProps[i], seq[f], mx(p->offx + 320 * i), sy(p->offy), MS, WHITE, 31);
 	}
-	// week title, flashing when chosen
-	u16 col = smChosen && ((int)(smChosenT * 20) & 1) ? RGB(0x33, 0xFF, 0xFF) : WHITE;
-	draw_centered(&shStory, weektitle_frame(smWeek), 128, my(520), MS, col, 31);
-	draw_centered(&shStory, diff_frame(smDiff), mx(1060), my(560), MS * 0.8f, WHITE, 31);
+	// level titles: the selected one at y 480, the next ones below
+	for (int k = 0; k < 3 && smWeek + k < WEEK_COUNT; k++) {
+		u16 col = k == 0 && smChosen && ((int)(smChosenT * 20) & 1) ? RGB(0x33, 0xFF, 0xFF) : WHITE;
+		float y = sy(480 + k * 125) + 6;
+		if (y > 200) break;
+		draw_centered(&shStory, weektitle_frame(smWeek + k), mx(560), y, MS, col, k == 0 ? 31 : 12);
+	}
+	// tracks (pink, VCR) and the difficulty selector
+	font_draw_centered(FONT_VCR8O, mx(640 - 1280 * 0.33f), sy(556), "TRACKS", HEXC(0xE55777), 31);
+	for (int i = 0; i < wi->nSongs; i++)
+		font_draw_centered(FONT_VCR8O, mx(640 - 1280 * 0.33f), sy(556) + 11 + i * 10, song_info[wi->songs[i]].name, HEXC(0xE55777), 31);
+	float ax = mx(850), ay = sy(480);
+	sheet_draw(&shStory, sm_arrows[0], ax, ay, MS, WHITE, 31);
+	draw_centered(&shStory, diff_frame(smDiff), mx(1068), ay + 9, MS, WHITE, 31);
+	sheet_draw(&shStory, sm_arrows[1], 243, ay, MS, WHITE, 31);
 }
 
 // ===========================================================================
@@ -411,6 +439,8 @@ void freeplay_enter(void) {
 	chr_play(&dj, "intro", true);
 	font_load(FONT_VCR12O, false);
 	font_load(FONT_VCR12O, true);
+	font_load(FONT_VCR16O, true);
+	font_load(FONT_VCR8O, true);
 	font_load(FONT_VCR8, false);
 	font_load(FONT_VCR8O, false);
 	menu_music(false);
@@ -491,27 +521,48 @@ void freeplay_update(float dt) {
 	}
 }
 
+// FreeplayState layout for the DS: backing card + DJ (bottom left, DJ at
+// 640,366 + its atlas position, as in the game), week background, the
+// difficulty and best score above the song capsules.
+static const Cam fpCam = { 505, 320, 0.9f, 0, 0 };
+
 void freeplay_draw(void) {
-	// backing card (pinkBack, tinted per character) + the week 1 background
-	u16 card = save.player ? RGB(0xFF, 0x9F, 0xC8) : RGB(0xFF, 0xD8, 0x63);
+	u16 card = save.player ? RGB(0xFF, 0x9C, 0xC8) : RGB(0xFF, 0xD8, 0x63);
 	gfx_rect(0, 0, 256, 192, RGB(0, 0, 0), 31);
-	sheet_draw(&shFpBg, 0, mx(524 * 0.74f), my(0), MS, WHITE, 31);
-	gfx_rect(0, my(0), mx(524), my(720), card, 31);
-	chr_draw(&dj, &menuCam);
+	sheet_draw(&shFpBg, 0, 104, 16, 176.0f / 720.0f, WHITE, 31);
+	gfx_rect(0, 16, 126, 192, card, 31);
+	// backing text (BackingCard: scrolling character names)
+	const char *t1 = save.player ? "PICO  PICO  PICO  PICO" : "BOYFRIEND  BOYFRIEND";
+	for (int r = 0; r < 6; r++) {
+		float off = fmodf(fpT * (r & 1 ? 18 : -18), 120);
+		font_draw(FONT_VCR16O, -120 + off + (r & 1) * 30, 22 + r * 26, t1, save.player ? RGB(0xE0, 0x60, 0xA0) : RGB(0xFF, 0x99, 0x63), 10);
+	}
+	chr_draw(&dj, &fpCam);
+	gfx_rect(0, 0, 256, 16, RGB(0, 0, 0), 31);
+	font_draw(FONT_VCR12O, 4, 2, "FREEPLAY", WHITE, 31);
+	// difficulty + personal best (right column)
+	if (shFpDiff.loaded) draw_centered(&shFpDiff, 0, 191, 31, MS * 0.85f, WHITE, 31);
+	char b[32], sc[24];
+	int o = fp_opt();
+	format_score(sc, save.songScore[o >> 3][o & 7]);
+	snprintf(b, sizeof(b), "BEST: %s", sc);
+	font_draw(FONT_VCR8O, 252 - font_width(FONT_VCR8O, b), 4, b, WHITE, 31);
 	// capsules
-	for (int i = -4; i <= 4; i++) {
+	for (int i = -3; i <= 4; i++) {
 		int k = fpSel + i;
 		if (k < 0 || k >= fpCount) continue;
 		float d = k - fpScroll;
-		float y = 96 + d * 22 - 8;
-		float x = 132 + fabsf(d) * 6;
-		bool s = i == 0;
-		gfx_rect(x, y, 256, y + 18, s ? RGB(0x20, 0x30, 0x60) : RGB(0x10, 0x10, 0x28), s ? 31 : 22);
-		gfx_rect(x, y, x + 2, y + 18, s ? RGB(0x33, 0xFF, 0xFF) : RGB(0x60, 0x60, 0x90), 31);
-		font_draw(FONT_VCR12O, x + 6, y + 3, freeplay_songs[fpList[k]].name, s ? WHITE : RGB(170, 170, 200), s ? 31 : 24);
+		float y = 112 + d * 21 - 8;
+		if (y < 46 || y > 192) continue;
+		float x = 132 + fabsf(d) * 5;
+		bool sel = i == 0;
+		gfx_rect(x, y, 258, y + 18, sel ? RGB(0x30, 0x40, 0x80) : RGB(0x12, 0x12, 0x2C), sel ? 31 : 24);
+		gfx_rect(x, y, x + 3, y + 18, sel ? RGB(0x33, 0xFF, 0xFF) : RGB(0x60, 0x60, 0x90), 31);
+		const char *nm = freeplay_songs[fpList[k]].name;
+		int fid = font_width(FONT_VCR12O, nm) > 252 - x - 8 ? FONT_VCR8O : FONT_VCR12O;
+		font_draw(fid, x + 7, y + (fid == FONT_VCR12O ? 3 : 5), nm, sel ? WHITE : RGB(170, 170, 200), sel ? 31 : 24);
 	}
-	if (shFpDiff.loaded) draw_centered(&shFpDiff, 0, 62, 14, MS * 0.75f, WHITE, 31);
-	if (fpChosen && ((int)(fpT * 16) & 1)) gfx_rect(132, 87, 256, 106, WHITE, 8);
+	if (fpChosen && ((int)(fpT * 16) & 1)) gfx_rect(132, 104, 256, 122, WHITE, 8);
 }
 
 // ===========================================================================
@@ -595,7 +646,7 @@ void charselect_draw(void) {
 	sheet_draw(&shCs, CHARSELECT_STAGE, mx(-40), my(390), MS, WHITE, 31);
 	chr_draw(&chill, &menuCam);
 	sheet_draw(&shCs, CHARSELECT_CURTAINS, mx(-47), my(-49), MS, WHITE, 31);
-	if (shCsName.loaded) draw_centered(&shCsName, 0, mx(1008), my(100), MS, WHITE, 31);
+	if (shCsName.loaded) draw_centered(&shCsName, 0, mx(980), my(100), MS, WHITE, 31);
 }
 
 // ===========================================================================

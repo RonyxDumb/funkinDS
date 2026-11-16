@@ -471,16 +471,17 @@ def convert_stage(sid):
             else:
                 fx.append(c['position'][0] + co[0])
                 fy.append(c['position'][1] - 300 + co[1])
-    cx0, cx1 = min(fx) - 120, max(fx) + 120
-    cy0, cy1 = min(fy) - 120, max(fy) + 120
-    zmin = zoom * 0.8 * 0.8      # DS_VIEW in play.c
+    mx_, my0, my1, zk = (120, 120, 120, 0.8) if bsid == 'school' else (160, 200, 160, 0.75)   # pixel stages: no VRAM to spare
+    cx0, cx1 = min(fx) - mx_, max(fx) + mx_
+    cy0, cy1 = min(fy) - my0, max(fy) + my1
+    zmin = zoom * zk             # zoom events (the DS shows the same 16:9 view)
 
     def window(q):
         if (bsid, q['name']) in NOCROP:
             return (-1e9, -1e9, 1e9, 1e9)
         sfx, sfy = q['sfx'], q['sfy']
-        return ((cx0 - 640) * sfx + 640 - 480 / zmin, (cy0 - 360) * sfy + 360 - 360 / zmin,
-                (cx1 - 640) * sfx + 640 + 480 / zmin, (cy1 - 360) * sfy + 360 + 360 / zmin)
+        return ((cx0 - 640) * sfx + 640 - 640 / zmin, (cy0 - 360) * sfy + 360 - 360 / zmin,
+                (cx1 - 640) * sfx + 640 + 640 / zmin, (cy1 - 360) * sfy + 360 + 360 / zmin)
     props = []
     for p in d['props']:
         if (bsid, p['name']) in PROP_SKIP or p['name'].endswith('_lightmap') or \
@@ -568,7 +569,7 @@ def convert_stage(sid):
             if q['pixel']:
                 ts = 1.0 / q['sx']
             else:
-                ts = KDS * zoom * 0.8 * qual
+                ts = KDS * zoom * 0.75 * qual
             tsd[q['name']] = ts
             tot += est(q, ts)
         if tot <= STAGE_BUDGET or qual < 0.2:
@@ -579,6 +580,7 @@ def convert_stage(sid):
             break
         qual *= 0.92
     print('stage %s: quality %.2f, estimated %d KB' % (sid, qual, tot // 1024))
+    qual0 = qual
     def build(tsd):
         c0, h0 = len(C_OUT), len(H_OUT)
         vram = 0
@@ -652,17 +654,34 @@ def convert_stage(sid):
                 1 if q['pixel'] else 0))
         return cprops, vram, c0, h0
 
-    for it in range(5):
-        cprops, vram, c0, h0 = build(tsd)
-        k = math.sqrt(STAGE_BUDGET / vram) * 0.97
-        if STAGE_BUDGET * 0.85 <= vram <= STAGE_BUDGET * 1.05 or it == 4 or (k > 1 and qual >= 1.0) or (k < 1 and qual < 0.2) \
-                or all(q['pixel'] or q['kind'] == 'solid' for q in props):
-            break
-        k = min(k, 1.0 / qual)
+    # measure / adjust: keep the best build that fits (texture packing makes
+    # the size jump, so the search remembers every try)
+    tries = []
+    base = dict(tsd)
+    for it in range(7):
+        cur = {n: (t if next(q for q in props if q['name'] == n)['pixel'] else base[n] * qual / qual0) for n, t in base.items()} if it else tsd
+        cprops, vram, c0, h0 = build(cur)
+        tries.append((vram, qual))
         del C_OUT[c0:]
         del H_OUT[h0:]
-        qual *= k
-        tsd = {n: (t if next(q for q in props if q['name'] == n)['pixel'] else t * k) for n, t in tsd.items()}
+        if all(q['pixel'] or q['kind'] == 'solid' for q in props):
+            break
+        fit = [t for t in tries if t[0] <= STAGE_BUDGET * 1.03]
+        if fit and max(fit)[0] >= STAGE_BUDGET * 0.9:
+            break
+        k = math.sqrt(STAGE_BUDGET / vram) * (0.98 if vram > STAGE_BUDGET else 1.01)
+        nq = min(1.0, qual * k)
+        if fit:   # never go below the best fitting quality
+            nq = max(nq, max(f[1] for f in fit) * 1.02) if vram <= STAGE_BUDGET * 1.03 else nq
+        if abs(nq - qual) < 0.005:
+            break
+        qual = nq
+    if '--verbose' in OPTS:
+        print('   tries', [(v // 1024, round(q, 2)) for v, q in tries])
+    fit = [t for t in tries if t[0] <= STAGE_BUDGET * 1.03] or [min(tries)]
+    vram, qual = max(fit, key=lambda t: t[1]) if fit else tries[-1]
+    cur = {n: (t if next(q for q in props if q['name'] == n)['pixel'] else base[n] * qual / qual0) for n, t in base.items()}
+    cprops, vram, c0, h0 = build(cur)
     print('stage %s: quality %.2f, %d KB vram' % (sid, qual, vram // 1024))
     def cv(k, f, dflt):
         v = ch.get(k, {}).get(f, dflt)

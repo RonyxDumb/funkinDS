@@ -18,11 +18,12 @@ void gameover_enter(void) {
 	chr_place(&dead, &si->stage->chars[0]);
 	chr_play(&dead, "firstDeath", true);
 	if (dead.anim < 0) chr_play(&dead, "singUPmiss", true);
-	cam.zoom = si->stage->zoom * 0.8f;
+	cam.zoom = si->stage->zoom * 0.75f;
 	cam.camX = P.camX;
 	cam.camY = P.camY;
-	camTX = dead.camFocusX;
-	camTY = dead.camFocusY;
+	// GameOverSubState: the camera moves to Boyfriend's midpoint
+	camTX = dead.x + dead.hdr->W / 2;
+	camTY = dead.y + dead.hdr->H / 2 - 40;
 	gx = 0;
 	audio_stop();
 	audio_sfx(pixel ? SFX_LOSS_PIXEL : SFX_LOSS, 1);
@@ -46,8 +47,8 @@ void gameover_leave(void) {
 void gameover_update(float dt) {
 	timer += dt;
 	chr_update(&dead, dt, 100, false);
-	cam.camX += (camTX - cam.camX) * fps_ratio(0.01f, dt);
-	cam.camY += (camTY - cam.camY) * fps_ratio(0.01f, dt);
+	cam.camX += (camTX - cam.camX) * fps_ratio(0.03f, dt);
+	cam.camY += (camTY - cam.camY) * fps_ratio(0.03f, dt);
 	if (phase == 0 && (dead.finished || timer > 3)) {
 		phase = 1;
 		chr_play(&dead, "deathLoop", true);

@@ -209,6 +209,7 @@ void chr_draw(Character *c, const Cam *cam) {
 	if (s->owner != c->data || s->frame != uf) {
 		const u8 *src = c->data + c->hdr->offPix + f->off;
 		swiDecompressLZSSWram((void *)src, s->buf);
+		DC_FlushRange(s->buf, f->w4 * f->h);   // the vblank upload uses DMA
 		gfx_queue_upload(s->off, s->buf, f->w4, f->h, 8 << s->wlog);
 		s->owner = c->data;
 		s->frame = uf;

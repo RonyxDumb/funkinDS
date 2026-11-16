@@ -401,6 +401,9 @@ static Upload upq[12];
 static int nUp;
 
 void gfx_queue_upload(u32 texOff, const u8 *src, int w4, int h, int stride) {
+	// a newer frame for the same slot replaces the queued one
+	for (int i = 0; i < nUp; i++)
+		if (upq[i].off == texOff) { upq[i].src = src; upq[i].w4 = w4; upq[i].h = h; upq[i].stride = stride; return; }
 	if (nUp >= 12) return;
 	upq[nUp].off = texOff;
 	upq[nUp].src = src;
@@ -410,22 +413,33 @@ void gfx_queue_upload(u32 texOff, const u8 *src, int w4, int h, int stride) {
 	nUp++;
 }
 
+// The 3D engine starts rendering the next frame ~48 lines before the end of
+// vblank, so bank A may only be mapped to the CPU for a short time: at most
+// UPLOAD_BUDGET bytes per vblank, the rest waits for the next one.
+#define UPLOAD_BUDGET (20 * 1024)
+
 void gfx_vblank(void) {
 	if (nUp) {
 		VRAM_A_CR = VRAM_ENABLE | VRAM_A_LCD;
-		for (int i = 0; i < nUp; i++) {
-			Upload *u = &upq[i];
+		int done = 0;
+		u32 bytes = 0;
+		while (done < nUp && (bytes == 0 || bytes + upq[done].w4 * upq[done].h <= UPLOAD_BUDGET)) {
+			Upload *u = &upq[done];
 			u32 *dst = tex_lcd(u->off);
-			const u32 *src = (const u32 *)u->src;
-			int wq = u->w4 >> 2, sq = u->stride >> 2;
-			for (int y = 0; y < u->h; y++) {
-				for (int x = 0; x < wq; x++) dst[x] = src[x];
-				dst += sq;
-				src += wq;
-			}
+			const u8 *src = u->src;
+			if (u->w4 == u->stride) dmaCopyWords(3, src, dst, u->w4 * u->h);
+			else
+				for (int y = 0; y < u->h; y++) {
+					dmaCopyWords(3, src, dst, u->w4);
+					dst += u->stride >> 2;
+					src += u->w4;
+				}
+			bytes += u->w4 * u->h;
+			done++;
 		}
 		VRAM_A_CR = VRAM_ENABLE | VRAM_A_TEXTURE_SLOT0;
-		nUp = 0;
+		for (int i = done; i < nUp; i++) upq[i - done] = upq[i];
+		nUp -= done;
 	}
 	if (shadeDirty) {
 		VRAM_F_CR = VRAM_ENABLE | VRAM_F_LCD;

@@ -6,7 +6,7 @@ PlayState P;
 
 #define HIT_WINDOW 160.0f          // Constants.HIT_WINDOW_MS / PBOT1_MISS_THRESHOLD
 #define LANE_W 30.0f
-#define DS_VIEW 0.8f              // the DS shows more of the stage than a 4:3 crop               // DS px between player lanes
+#define DS_VIEW 0.75f             // the whole 16:9 view in 256x144 (letterboxed)               // DS px between player lanes
 static const u32 laneKeys[4] = { KEY_LEFT | KEY_Y, KEY_DOWN | KEY_B, KEY_UP | KEY_X, KEY_RIGHT | KEY_A };
 static bool subDirty;
 static int subTimer;
@@ -634,6 +634,8 @@ static void draw_sub(void) {
 		snprintf(b, sizeof(b), "sheets %d%d%d%d%d%d chr %d%d%d", P.shNotes.loaded, P.shSplash.loaded, P.shPopup.loaded,
 			P.shCountdown.loaded, P.shIcon[0].loaded, P.shIcon[1].loaded, P.chr[0].slot != NULL, P.chr[1].slot != NULL, P.chr[2].slot != NULL);
 		sub_text(FONT_VCR8, 2, 168, b, RGB(255, 255, 0));
+		snprintf(b, sizeof(b), "cam %d,%d z %d.%02d", (int)P.camX, (int)P.camY, (int)P.cam.zoom, (int)(P.cam.zoom * 100) % 100);
+		sub_text(FONT_VCR8, 2, 152, b, RGB(255, 255, 0));
 	}
 #endif
 	sub_text_centered(FONT_VCR8, 128, 176, "START: pause", RGB(150, 140, 170));
@@ -949,6 +951,14 @@ static void draw_healthbar(void) {
 	float split = x0 + 4 * KDS + (w - 8 * KDS) * (1 - P.health / 2);
 	gfx_rect(x0 + 4 * KDS, y + 4 * KDS, split, y + h - 4 * KDS, RGB(255, 0, 0), 31);
 	gfx_rect(split, y + 4 * KDS, x0 + w - 4 * KDS, y + h - 4 * KDS, RGB(0x66, 0xFF, 0x33), 31);
+	// score text (PlayState.scoreText: under the health bar)
+	{
+		char b[48], sc[24];
+		format_score(sc, P.score);
+		if (save.botplay) snprintf(b, sizeof(b), "Bot Play Enabled");
+		else snprintf(b, sizeof(b), "Score: %s", sc);
+		font_draw_centered(FONT_VCR8O, 128, save.downscroll ? y + h + 3 : y + h + 4, b, WHITE, 31);
+	}
 	// icons (HealthIcon: 150 px, centered around the split point)
 	float isz = 150 * KDS;
 	for (int i = 0; i < 2; i++) {
@@ -968,6 +978,10 @@ static void draw_healthbar(void) {
 void play_draw(void) {
 	if (!P.chart) return;
 	stage_draw(&P.cam);
+	// letterbox: the game camera shows exactly the 1280x720 view of the game
+	// (alpha 30: translucent polygons keep the drawing order on the DS 3D engine)
+	gfx_rect(0, 0, 256, 24, RGB(0, 0, 0), 30);
+	gfx_rect(0, 168, 256, 192, RGB(0, 0, 0), 30);
 	// popups (camHUD)
 	if (P.shPopup.loaded) {
 		for (int i = 0; i < 16; i++) {

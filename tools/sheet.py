@@ -49,20 +49,21 @@ H_OUT = []
 # Frame origin = (0,0); parts are placed at (ox, oy) texels from it.
 # ---------------------------------------------------------------------------
 class Sheet:
-    def __init__(self, name, scale, fmt=FMT_256COL, colors=255, dither=False, atlas_w=256):
+    def __init__(self, name, scale, fmt=FMT_256COL, colors=255, dither=False, atlas_w=256, atlas_h=256):
         self.name = name
         self.scale = scale          # texels per drawn unit
         self.fmt = fmt
         self.ncolors = colors
         self.dither = dither
         self.atlas_w = atlas_w
+        self.atlas_h = atlas_h
         self.items = []
 
     def add_tiled(self, fname, im, ox=0, oy=0):
         self.items.append((fname, 'tiled', im, (ox, oy)))
 
     def add_packed(self, fname, im, ox=0, oy=0):
-        if im.width > self.atlas_w or im.height > 256:
+        if im.width > self.atlas_w or im.height > self.atlas_h:
             # too big for the shared atlas: own power-of-two tiles
             self.items.append((fname, 'tiled', im, (ox, oy)))
         else:
@@ -92,7 +93,7 @@ class Sheet:
                     atlas['y'] += atlas['rowh'] + 1
                     atlas['x'] = 0
                     atlas['rowh'] = 0
-            if atlas is None or atlas['y'] + h > 256:
+            if atlas is None or atlas['y'] + h > self.atlas_h:
                 atlas = {'img': Image.new('RGBA', (self.atlas_w, 256), (0, 0, 0, 0)), 'x': 0, 'y': 0, 'rowh': 0, 'used_h': 0}
                 textures.append(('atlas', atlas))
                 atlas['tex'] = len(textures) - 1
