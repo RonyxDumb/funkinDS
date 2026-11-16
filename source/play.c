@@ -340,6 +340,131 @@ static void run_event(const ChartEvent *e) {
 }
 
 // ---------------------------------------------------------------------------
+// dialogue (Conversation / DialogueBox / Speaker)
+// ---------------------------------------------------------------------------
+static int dialogueSong = -1;
+
+static void sub_header_dialogue(void) {
+	sub_clear(RGB(20, 12, 40));
+	sub_text_centered(FONT_VCR16O, 128, 40, P.info->name, WHITE);
+	sub_text_centered(FONT_VCR12O, 128, 100, "A: next", RGB(0xF9, 0xCF, 0x51));
+	sub_text_centered(FONT_VCR12O, 128, 120, "START: skip", RGB(0xF9, 0xCF, 0x51));
+}
+
+static void dlg_load_line(void) {
+	const DialogueLine *l = &P.dlg->lines[P.dlgLine];
+	if (l->box != P.dlgBoxId) {
+		sheet_unload(&P.shDlgBox);
+		sheet_load(&P.shDlgBox, dlg_boxes[l->box].sheet, false);
+		P.dlgBoxId = l->box;
+	}
+	bool have = false;
+	for (int i = 0; i < 4; i++) if (P.dlgSpkId[i] == l->speaker && P.shDlgSpk[i].loaded) have = true;
+	if (!have) {
+		int slot = P.dlgLine & 3;
+		sheet_unload(&P.shDlgSpk[slot]);
+		sheet_load(&P.shDlgSpk[slot], dlg_speakers[l->speaker].sheet, false);
+		P.dlgSpkId[slot] = l->speaker;
+	}
+	P.dlgChars = 0;
+}
+
+static void dlg_end(void) {
+	for (int i = 0; i < 4; i++) sheet_unload(&P.shDlgSpk[i]);
+	sheet_unload(&P.shDlgBox);
+	if (P.dlg->music[0]) audio_stop_music();
+	P.dlg = NULL;
+	sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin, false);
+	subDirty = true;
+}
+
+static void dlg_start(void) {
+	for (int i = 0; i < conversation_count; i++)
+		if (!strcmp(conversations[i].song, P.info->tag)) P.dlg = &conversations[i];
+	if (!P.dlg) return;
+	dialogueSong = g_song;
+	for (int i = 0; i < 4; i++) P.dlgSpkId[i] = -1;
+	P.dlgBoxId = -1;
+	P.dlgLine = 0;
+	P.dlgFade = 0;
+	font_load(FONT_VCR12O, true);
+	if (P.dlg->music[0]) {
+		char m[48];
+		snprintf(m, sizeof(m), "nitro:/snd/%s.adp", P.dlg->music);
+		audio_play_music(m, true, 0);
+		audio_fade_music(0.8f, 2);
+	}
+	dlg_load_line();
+	sub_header_dialogue();
+}
+
+static void dlg_update(float dt) {
+	P.dlgFade = clampf(P.dlgFade + dt / 2, 0, 1);
+	const char *t = P.dlg->lines[P.dlgLine].text;
+	int len = strlen(t);
+	P.dlgChars += dt * 24;
+	if (kDown & KEY_START) { dlg_end(); return; }
+	if (kDown & (KEY_A | KEY_TOUCH)) {
+		if (P.dlgChars < len) P.dlgChars = len;
+		else {
+			audio_sfx(SFX_SCROLL, 0.6f);
+			if (++P.dlgLine >= P.dlg->n) { dlg_end(); return; }
+			dlg_load_line();
+		}
+	}
+}
+
+static void dlg_draw(void) {
+	u32 bg = P.dlg->bg;
+	gfx_rect(0, 0, 256, 192, HEXC(bg), A31(0.7f * P.dlgFade));
+	const DialogueLine *l = &P.dlg->lines[P.dlgLine];
+	#define HUDX(v) (((v) - 640) * KDS + 128)
+	#define HUDY(v) (((v) - 360) * KDS + 96)
+	for (int i = 0; i < 4; i++) {
+		if (P.dlgSpkId[i] != l->speaker || !P.shDlgSpk[i].loaded) continue;
+		const DialogueSprite *d = &dlg_speakers[l->speaker];
+		// the 16:9 layout is cropped on the DS: keep the portrait on screen
+		float x = HUDX(d->x), w = d->w * KDS;
+		if (x + w > 262) x = 262 - w;
+		if (x < -6) x = -6;
+		sheet_draw(&P.shDlgSpk[i], 0, x, HUDY(d->y), KDS, WHITE, 31);
+	}
+	const DialogueSprite *b = &dlg_boxes[l->box];
+	if (P.shDlgBox.loaded) sheet_draw(&P.shDlgBox, 0, HUDX(b->x), HUDY(b->y), KDS, WHITE, 31);
+	// text (typewriter), wrapped inside the box
+	char buf[256];
+	int n = (int)P.dlgChars;
+	snprintf(buf, sizeof(buf), "%.*s", n, l->text);
+	float x0 = HUDX(b->x + b->w * 0.12f), y = HUDY(b->y + b->h * 0.56f), maxw = b->w * 0.76f * KDS;
+	if (x0 < 24) x0 = 24;
+	if (x0 + maxw > 244) maxw = 244 - x0;
+	char line[160];
+	line[0] = 0;
+	int ll = 0;
+	const char *p = buf;
+	while (*p) {
+		const char *w = p;
+		while (*p && *p != ' ') p++;
+		char word[64];
+		int wl = p - w < 63 ? p - w : 63;
+		memcpy(word, w, wl);
+		word[wl] = 0;
+		char test[240];
+		snprintf(test, sizeof(test), "%s%s%s", line, ll ? " " : "", word);
+		if (ll && font_width(FONT_VCR12O, test) > maxw) {
+			font_draw(FONT_VCR12O, x0, y, line, dlg_box_color[l->box], 31);
+			y += 13;
+			snprintf(line, sizeof(line), "%s", word);
+		} else snprintf(line, sizeof(line), "%s", test);
+		ll = strlen(line);
+		if (*p) p++;
+	}
+	if (ll) font_draw(FONT_VCR12O, x0, y, line, dlg_box_color[l->box], 31);
+	#undef HUDX
+	#undef HUDY
+}
+
+// ---------------------------------------------------------------------------
 // enter / leave
 // ---------------------------------------------------------------------------
 static bool load_icon(Sheet *sh, const char *name) {
@@ -353,6 +478,16 @@ void play_enter(void) {
 	audio_stop();
 	memset(&P, 0, sizeof(P));
 	P.info = &song_info[g_song];
+	// story mode start cutscene (songs/darnell.hxc)
+	const Cutscene *cs = g_storyMode && !g_cutsceneDone ? cutscene_for(P.info->tag, false) : NULL;
+	g_cutsceneDone = true;
+	if (cs) {
+		g_video = cs->video;
+		g_videoNext = ST_PLAY;
+		P.chart = NULL;
+		state_switch(ST_VIDEO);
+		return;
+	}
 	char path[64];
 	snprintf(path, sizeof(path), "/song/%s-%s.cht", P.info->tag, diff_name(g_diff));
 	u32 size;
@@ -406,7 +541,10 @@ void play_enter(void) {
 	sheet_load(&P.shNotes, P.skin->sheet, false);
 	sheet_load(&P.shSplash, P.splashDef->sheet, false);
 	sheet_load(&P.shPopup, P.info->pixel ? &sheet_popup_pixel : &sheet_popup_funkin, false);
-	sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin, false);
+	bool dialogue = false;
+	for (int i = 0; i < conversation_count; i++) if (!strcmp(conversations[i].song, P.info->tag)) dialogue = true;
+	dialogue = dialogue && g_storyMode && dialogueSong != g_song;
+	if (!dialogue) sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin, false);
 	load_icon(&P.shIcon[0], P.info->iconP);
 	load_icon(&P.shIcon[1], P.info->iconO);
 	font_load(FONT_VCR8O, true);
@@ -427,6 +565,7 @@ void play_enter(void) {
 	P.cam.zoom = P.currentZoom * DS_VIEW;
 	P.cam.camX = P.camX;
 	P.cam.camY = P.camY;
+	if (g_storyMode && dialogueSong != g_song) dlg_start();
 	subDirty = true;
 	g_fade = 0;
 }
@@ -443,6 +582,7 @@ void play_leave(void) {
 	sheet_unload(&P.shCountdown);
 	sheet_unload(&P.shIcon[0]);
 	sheet_unload(&P.shIcon[1]);
+	if (P.dlg) dlg_end();
 	for (int i = 0; i < 2; i++) { free(P.sl[i].notes); P.sl[i].notes = NULL; }
 	free(P.chartData);
 	P.chartData = NULL;
@@ -551,11 +691,15 @@ static void end_song(void) {
 	if (g_storyMode) {
 		const WeekInfo *w = &week_info[g_week];
 		g_weekPos++;
+		const Cutscene *cs = cutscene_for(P.info->tag, true);
+		g_cutsceneDone = false;
 		if (g_weekPos < w->nSongs) {
 			g_song = w->songs[g_weekPos];
-			state_switch(ST_PLAY);
+			if (cs) { g_video = cs->video; g_videoNext = ST_PLAY; state_switch(ST_VIDEO); }
+			else state_switch(ST_PLAY);
 			return;
 		}
+		if (cs) { g_video = cs->video; g_videoNext = ST_RESULTS; }
 		snprintf(g_results.title, sizeof(g_results.title), "%s", w->name);
 		if (!save.botplay && g_results.score > save.weekScore[g_week][g_diff]) {
 			save.weekScore[g_week][g_diff] = g_results.score;
@@ -569,7 +713,7 @@ static void end_song(void) {
 		}
 	}
 	save_write();
-	state_switch(ST_RESULTS);
+	state_switch(g_storyMode && cutscene_for(P.info->tag, true) ? ST_VIDEO : ST_RESULTS);
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +737,12 @@ void play_update(float dt) {
 	if (P.paused) {
 		update_pause();
 		if (subDirty) { draw_sub(); subDirty = false; }
+		return;
+	}
+	if (P.dlg) {
+		dlg_update(dt);
+		for (int r = 0; r < 3; r++) if (P.chars[r]) chr_update(P.chars[r], dt, P.stepMs, false);
+		stage_update(dt);
 		return;
 	}
 	// conductor
@@ -831,5 +981,6 @@ void play_draw(void) {
 	draw_strum(0);
 	if (P.countdownAlpha > 0.01f && P.shCountdown.loaded)
 		sheet_draw(&P.shCountdown, P.countdownFrame, 128, 96, KDS * 0.6f, WHITE, A31(P.countdownAlpha));
+	if (P.dlg) dlg_draw();
 	if (P.paused) gfx_rect(0, 0, 256, 192, 0, A31(0.6f));
 }

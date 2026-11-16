@@ -1404,6 +1404,126 @@ def convert_freeplay_menus():
     H_OUT.append('extern const SheetDef *const fpdiff_sheets[%d];' % len(DIFFS))
 
 
+# Weekend 1 video cutscenes (songs/darnell.hxc, 2hot.hxc, blazin.hxc): 8 bpp
+# frames + palette, LZ77 compressed (see source/video.c), audio as ADPCM
+VIDEOS = [('darnellCutscene', 0), ('2hotCutscene', 1), ('blazinCutscene', 1)]   # (name, 0 start / 1 ending)
+VIDEO_SONG = {'darnellCutscene': 'darnell', '2hotCutscene': '2hot', 'blazinCutscene': 'blazin'}
+
+
+def convert_videos():
+    rows = []
+    for name, ending in VIDEOS:
+        src = os.path.join(A, 'videos', 'videos', name + '.mp4')
+        if not os.path.exists(src):
+            continue
+        rows.append('{%s,%s,%d}' % (cstr(VIDEO_SONG[name]), cstr(name), ending))
+        dst = outpath('vid', name + '.vid')
+        if os.path.exists(dst) and '--redo-video' not in OPTS:
+            continue
+        w, h, fps = 256, 192, 12
+        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', src, '-vf', 'fps=%d,scale=-2:192:flags=lanczos,crop=256:192' % fps,
+                              '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], check=True, stdout=subprocess.PIPE).stdout
+        fsize = w * h * 3
+        n = len(raw) // fsize
+        frames = []
+        for i in range(n):
+            im = Image.frombytes('RGB', (w, h), raw[i * fsize:(i + 1) * fsize])
+            q = im.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+            pal = q.getpalette()[:768]
+            pal += [0] * (768 - len(pal))
+            pb = b''.join(struct.pack('<H', rgb15(pal[k * 3], pal[k * 3 + 1], pal[k * 3 + 2])) for k in range(256))
+            frames.append(pb + lz10(q.tobytes()))
+        hdr = b'VID1' + struct.pack('<HHHH', w, h, fps, n)
+        pos = len(hdr) + 4 * (n + 1)
+        offs = []
+        for fr in frames:
+            offs.append(pos)
+            pos += len(fr)
+        offs.append(pos)
+        with open(dst, 'wb') as f:
+            f.write(hdr)
+            f.write(struct.pack('<%dI' % (n + 1), *offs))
+            for fr in frames:
+                f.write(fr)
+        adpcm([src], 'snd/%s.adp' % name)
+        print('video %-16s %4d frames %6d KB' % (name, n, pos // 1024))
+    C_OUT.append('const Cutscene cutscenes[] = {%s};\nconst int cutscene_count = %d;' % (','.join(rows) or '{0}', len(rows)))
+    H_OUT.append('typedef struct { const char *song, *video; u8 ending; } Cutscene;\nextern const Cutscene cutscenes[];\nextern const int cutscene_count;')
+
+
+# Week 6 dialogue (data/dialogue): conversations, speaker portraits, boxes.
+# Sprites are in camHUD at scale 5.4 around their frame center, positioned
+# at -offsets (FlxSprite.offset); frames are baked 1 texel per source pixel.
+CONVERSATIONS = ['senpai', 'roses', 'thorns']
+
+
+def sprite_box(fw, fh, sx, sy, x=0, y=0):
+    """Top-left world position and size of a frame drawn with scale (sx, sy)
+    around its center (no updateHitbox)."""
+    ox, oy = fw / 2.0, fh / 2.0
+    return x + ox - ox * sx, y + oy - oy * sy, fw * sx, fh * sy
+
+
+def convert_dialogue():
+    D = os.path.join(DATA, 'dialogue')
+    spk, box = {}, {}
+
+    def sprite(kind, name, path, anim_prefix, d):
+        base = resolve(path)
+        im, frames = parse_sparrow(base + '.xml', base + '.png')
+        sel = frames_by_prefix(frames, anim_prefix) or frames
+        f = sel[-1] if kind == 'box' else sel[0]
+        full = full_frame(im, f)
+        sc = float(d.get('scale', 1))
+        off = d.get('offsets', [0, 0])
+        x0, y0, w, h = sprite_box(full.width, full.height, sc, sc, -off[0], -off[1])
+        if d.get('flipX'):
+            full = full.transpose(Image.FLIP_LEFT_RIGHT)
+        t, (bx, by) = trim(full)
+        sh = Sheet('dlg_%s_%s' % (kind, cid(name).lower()), 1.0 / sc)
+        sh.add_packed('main', t, bx, by)
+        sh.build()
+        return '{&sheet_dlg_%s_%s,%s,%s,%s,%s}' % (kind, cid(name).lower(), cfloat(x0), cfloat(y0), cfloat(w), cfloat(h))
+    rows = []
+    for c in CONVERSATIONS:
+        p = os.path.join(D, 'conversations', c + '.json')
+        if not os.path.exists(p):
+            continue
+        cv = jload(p)
+        lines = []
+        for ln in cv['dialogue']:
+            sp, bx = ln['speaker'], ln['box']
+            if sp not in spk:
+                sd = jload(os.path.join(D, 'speakers', sp + '.json'))
+                spk[sp] = (len(spk), sprite('spk', sp, sd['assetPath'], sd['animations'][-1]['prefix'], sd))
+            if bx not in box:
+                bd = jload(os.path.join(D, 'boxes', bx + '.json'))
+                pre = next((a['prefix'] for a in bd['animations'] if a['name'] == 'idle'), bd['animations'][0]['prefix'])
+                box[bx] = (len(box), sprite('box', bx, bd['assetPath'], pre, bd), color_hex(bd['text'].get('color', '#3F2021')))
+            text = ' '.join(ln['text'])
+            lines.append('{%d,%d,%s}' % (spk[sp][0], box[bx][0], cstr(text)))
+        C_OUT.append('static const DialogueLine dlg_%s_lines[] = {%s};' % (cid(c).lower(), ','.join(lines)))
+        mus = (cv.get('music') or {}).get('asset') or ''
+        if mus and '--no-audio' not in OPTS:
+            src = os.path.join(A, 'week6', 'music', mus + '.ogg')
+            if os.path.exists(src) and not os.path.exists(outpath('snd', mus.lower() + '.adp')):
+                adpcm([src], 'snd/%s.adp' % mus.lower())
+        rows.append('{%s,0x%06X,%s,%d,dlg_%s_lines}' % (cstr(c), color_hex(cv['backdrop'].get('color', '#B3DFD8')),
+                                                       cstr(mus.lower()), len(lines), cid(c).lower()))
+    C_OUT.append('const DialogueSprite dlg_speakers[] = {%s};' % ','.join(v[1] for v in sorted(spk.values())))
+    C_OUT.append('const DialogueSprite dlg_boxes[] = {%s};' % ','.join(v[1] for v in sorted(box.values())))
+    C_OUT.append('const u16 dlg_box_color[] = {%s};' % ','.join('0x%04X' % rgb15c(v[2]) for v in sorted(box.values())))
+    C_OUT.append('const Conversation conversations[] = {%s};\nconst int conversation_count = %d;' % (','.join(rows), len(rows)))
+    H_OUT.append("""typedef struct { const SheetDef *sheet; float x, y, w, h; } DialogueSprite;
+typedef struct { u8 speaker, box; const char *text; } DialogueLine;
+typedef struct { const char *song; u32 bg; const char *music; u8 n; const DialogueLine *lines; } Conversation;
+extern const DialogueSprite dlg_speakers[];
+extern const DialogueSprite dlg_boxes[];
+extern const u16 dlg_box_color[];
+extern const Conversation conversations[];
+extern const int conversation_count;""")
+
+
 def convert_fonts_all():
     vcr = os.path.join(A, 'fonts', 'vcr.ttf')
     SH.FONTS[:] = [('vcr8', vcr, 8, 0), ('vcr8o', vcr, 8, 1), ('vcr12', vcr, 12, 0), ('vcr12o', vcr, 12, 1),
@@ -1433,6 +1553,8 @@ def main():
     convert_menus(weeks)
     convert_freeplay_menus()
     convert_abot()
+    convert_videos()
+    convert_dialogue()
     convert_fonts_all()
     if '--no-audio' not in OPTS:
         convert_audio()

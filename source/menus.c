@@ -297,6 +297,7 @@ void story_update(float dt) {
 			g_weekScore = 0;
 			g_diff = smDiff;
 			g_song = week_info[smWeek].songs[0];
+			g_cutsceneDone = false;
 			save.lastDiff = smDiff;
 			audio_stop();
 			state_switch(ST_PLAY);

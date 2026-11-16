@@ -17,6 +17,15 @@ int g_weekScore = 0;
 int g_optionsReturn = ST_MAINMENU;
 bool g_titleSeen = false;
 Results g_results;
+const char *g_video;
+int g_videoNext;
+bool g_cutsceneDone;
+
+const Cutscene *cutscene_for(const char *song, bool ending) {
+	for (int i = 0; i < cutscene_count; i++)
+		if (!strcmp(cutscenes[i].song, song) && cutscenes[i].ending == ending) return &cutscenes[i];
+	return NULL;
+}
 int perf_drops, perf_frames;
 
 Save save;
@@ -33,6 +42,7 @@ static const StateDef states[ST_COUNT] = {
 	[ST_GAMEOVER] = { gameover_enter, gameover_update, gameover_draw, gameover_leave },
 	[ST_CHARSELECT] = { charselect_enter, charselect_update, charselect_draw, charselect_leave },
 	[ST_RESULTS] = { results_enter, results_update, results_draw, results_leave },
+	[ST_VIDEO] = { video_enter, video_update_state, video_draw, video_leave },
 };
 
 const char *diff_name(int d) {
@@ -120,6 +130,7 @@ void state_switch(int st) { nextState = st; }
 static void do_switch(void) {
 	if (curState >= 0) states[curState].leave();
 	tween_clear();
+	video_close();
 	gfx_reset_vram();
 	font_unload_all();
 	curState = nextState;
@@ -141,6 +152,7 @@ int main(int argc, char **argv) {
 	srand(12345);
 
 	gfx_init();
+	video_init();
 	sub_init();
 	audio_init();
 	save_load();
@@ -185,6 +197,7 @@ int main(int argc, char **argv) {
 
 		swiWaitForVBlank();
 		gfx_vblank();
+		video_vblank();
 		sub_present();
 		int b = (int)(clampf(g_fade, 0, 1) * 16);
 		int bs = (int)(clampf(g_fade > g_subFade ? g_fade : g_subFade, 0, 1) * 16);

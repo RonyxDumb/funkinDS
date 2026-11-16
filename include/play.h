@@ -70,6 +70,13 @@ typedef struct {
 	int countdownFrame;
 	bool hideOpp;
 	Character abot;         // Nene's speaker
+	// dialogue (week 6)
+	const Conversation *dlg;
+	int dlgLine;
+	float dlgChars, dlgFade;
+	Sheet shDlgSpk[4], shDlgBox;
+	int dlgSpkId[4];
+	int dlgBoxId;
 } PlayState;
 
 extern PlayState P;
