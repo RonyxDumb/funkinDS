@@ -20,7 +20,7 @@ NITRODATA	:=	nitrofiles
 GAME_TITLE	:=	Friday Night Funkin DS
 GAME_SUBTITLE1	:=	Unofficial fan port
 GAME_SUBTITLE2	:=	Nintendo DS
-GAME_ICON	:=	$(TOPDIR)/icon.bmp
+GAME_ICON	:=	$(if $(wildcard $(TOPDIR)/build_tools/icon.bmp),$(TOPDIR)/build_tools/icon.bmp,$(TOPDIR)/icon.bmp)
 
 ARCH		:=	-march=armv5te -mtune=arm946e-s -mthumb
 

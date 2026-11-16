@@ -26,77 +26,86 @@ static void sub_header(const char *title) {
 }
 
 // ===========================================================================
-// Title
+// Title (TitleState): the logo and Girlfriend are streamed sprites, laid
+// out to fill the DS top screen (logo top-left in front, Girlfriend on the
+// speakers bottom-right, as in the game but tighter).
 // ===========================================================================
-static Sheet shTitle;
-static float logoT, gfT, flash;
-static bool gfRight, titlePressed;
-static float pressTimer;
+#include "character.h"
+
+static Character tLogo, tGf;
+static float flash;
+static bool titlePressed;
+static float pressTimer, titleT;
+#define TK 0.22f                                   // DS px per unit
+static const Cam titleCam = { 640, 360, TK / KDS, 0, 0 };
+static inline float wx_of(float ds) { return (ds - 128) / TK + 640; }
+static inline float wy_of(float ds) { return (ds - 96) / TK + 360; }
 
 void title_enter(void) {
-	sheet_load(&shTitle, &sheet_title, false);
+	chr_slots_reset();
+	memset(&tLogo, 0, sizeof(tLogo));
+	memset(&tGf, 0, sizeof(tGf));
+	chr_load(&tGf, "title_gf", ROLE_OTHER);
+	chr_load(&tLogo, "title_logo", ROLE_OTHER);
+	// frame origins in DS pixels
+	tLogo.x = wx_of(-14);
+	tLogo.y = wy_of(-12);
+	if (tGf.loaded) {
+		tGf.x = wx_of(256 - tGf.hdr->W * TK + 8);
+		tGf.y = wy_of(192 - tGf.hdr->H * TK + 6);
+	}
 	font_load(FONT_VCR16O, true);
 	font_load(FONT_VCR12O, false);
+	font_load(FONT_VCR16O, false);
 	font_load(FONT_VCR8, false);
 	menu_music(true);
-	logoT = gfT = 0;
-	gfRight = false;
 	titlePressed = false;
-	flash = g_titleSeen ? 0 : 1;
+	titleT = 0;
+	if (!g_titleSeen) screen_flash(2);       // skipIntro: FlxG.camera.flash(WHITE, 4)
 	g_titleSeen = true;
 	lastBeat = -1;
 	sub_clear(RGB(0, 0, 0));
-	sub_text_centered(FONT_VCR12O, 128, 70, "Friday Night Funkin'", WHITE);
-	sub_text_centered(FONT_VCR8, 128, 92, "Nintendo DS port", RGB(200, 200, 200));
-	sub_text_centered(FONT_VCR8, 128, 150, "Press START", RGB(0x33, 0xFF, 0xFF));
-	g_fade = 0;
+	sub_fill(0, 60, 256, 70, RGB(0x1A, 0x10, 0x30));
+	sub_text_centered(FONT_VCR16O, 128, 74, "Friday Night Funkin'", WHITE);
+	sub_text_centered(FONT_VCR12O, 128, 102, "Nintendo DS", RGB(0xF9, 0xCF, 0x51));
+	sub_text_centered(FONT_VCR8, 128, 170, "Unofficial fan port", RGB(120, 110, 140));
 }
 
-void title_leave(void) { sheet_unload(&shTitle); }
+void title_leave(void) {
+	chr_unload(&tLogo);
+	chr_unload(&tGf);
+	chr_slots_reset();
+}
 
 void title_update(float dt) {
 	int b = menu_beat();
 	if (b != lastBeat) {
 		lastBeat = b;
-		logoT = 0;
-		gfT = 0;
-		gfRight = !gfRight;
+		chr_play(&tLogo, "idle", true);
+		chr_dance(&tGf, true);
 	}
-	logoT += dt;
-	gfT += dt;
-	if (flash > 0) flash -= dt / 1.5f;
+	titleT += dt;
+	chr_update(&tLogo, dt, 100, false);
+	chr_update(&tGf, dt, 100, false);
 	if (!titlePressed && (kDown & (KEY_START | KEY_A | KEY_TOUCH))) {
 		titlePressed = true;
 		pressTimer = 0;
-		flash = 1;
+		screen_flash(1);
 		audio_sfx(SFX_CONFIRM, 0.7f);
 	}
 	if (titlePressed) {
 		pressTimer += dt;
-		if (pressTimer > 1.5f) g_fade = clampf((pressTimer - 1.5f) / 0.5f, 0, 1);
-		if (pressTimer > 2.0f) state_switch(ST_MAINMENU);
+		if (pressTimer > 1.4f) state_switch(ST_MAINMENU);
 	}
 }
 
-// TitleState layout (logo at -150,-100, gf at 0.4w,0.07h, text at 100,0.8h),
-// scaled to 0.22 DS px per unit so it fills more of the 4:3 screen
-#define TS_K 0.22f
-static inline float tx(float v) { return (v - 640) * TS_K + 128 + 6; }
-static inline float ty(float v) { return (v - 360) * TS_K + 96 - 6; }
-
 void title_draw(void) {
-	int f = (int)(logoT * 24 / 5);
-	if (f >= TITLE_LOGO_LEN) f = TITLE_LOGO_LEN - 1;
-	sheet_draw(&shTitle, title_logo[f], tx(-150) + 14, ty(-100), TS_K, WHITE, 31);
-	int g = (int)(gfT * 24 / 4);
-	const u8 *seq = gfRight ? title_gf_right : title_gf_left;
-	int len = gfRight ? TITLE_GF_RIGHT_LEN : TITLE_GF_LEFT_LEN;
-	if (g >= len) g = len - 1;
-	sheet_draw(&shTitle, seq[g], tx(1280 * 0.4f), ty(720 * 0.07f), TS_K, WHITE, 31);
-	bool on = !titlePressed || ((int)(pressTimer * 20) & 1);
-	float pulse = titlePressed ? 1 : 0.65f + 0.35f * sinf(logoT * 5);
-	if (on) font_draw_centered(FONT_VCR16O, 128, 170, "Press START to Begin", titlePressed ? WHITE : RGB(0x33, 0xFF, 0xFF), A31(pulse));
-	if (flash > 0) gfx_rect(0, 0, 256, 192, WHITE, A31(flash));
+	chr_draw(&tGf, &titleCam);
+	chr_draw(&tLogo, &titleCam);
+	bool on = !titlePressed || ((int)(pressTimer * 16) & 1);
+	float pulse = titlePressed ? 1 : 0.6f + 0.4f * sinf(titleT * 5);
+	if (on) font_draw(FONT_VCR16O, 6, 172, "PRESS START", titlePressed ? WHITE : RGB(0x33, 0xFF, 0xFF), A31(pulse));
+	(void)flash;
 }
 
 // ===========================================================================
@@ -166,8 +175,7 @@ void mainmenu_update(float dt) {
 	if (mmChosen) {
 		mmFlick += dt;
 		if (mmFlick > 1.0f) {
-			g_fade = clampf((mmFlick - 1.0f) / 0.3f, 0, 1);
-			if (mmFlick > 1.3f) {
+			{
 				if (mmSel == 0) state_switch(ST_STORY);
 				else if (mmSel == 1) state_switch(ST_FREEPLAY);
 				else { g_optionsReturn = ST_MAINMENU; state_switch(ST_OPTIONS); }
@@ -300,8 +308,7 @@ void story_update(float dt) {
 	if (b != lastBeat) { lastBeat = b; smPropT = 0; smPropRight = !smPropRight; }
 	if (smChosen) {
 		smChosenT += dt;
-		if (smChosenT > 1.0f) g_fade = clampf((smChosenT - 1.0f) / 0.4f, 0, 1);
-		if (smChosenT > 1.4f) {
+		if (smChosenT > 1.1f) {
 			g_storyMode = true;
 			g_week = smWeek;
 			g_weekPos = 0;
@@ -310,7 +317,6 @@ void story_update(float dt) {
 			g_song = week_info[smWeek].songs[0];
 			g_cutsceneDone = false;
 			save.lastDiff = smDiff;
-			audio_stop();
 			state_switch(ST_PLAY);
 		}
 		return;
@@ -492,14 +498,12 @@ void freeplay_update(float dt) {
 	chr_update(&dj, dt, 100, false);
 	if (dj.finished && !strcmp(chr_anim_name(&dj), "intro")) chr_play(&dj, "idle", true);
 	if (fpChosen) {
-		if (fpT > 1.0f) g_fade = clampf((fpT - 1.0f) / 0.4f, 0, 1);
-		if (fpT > 1.4f) {
+		if (fpT > 1.0f) {
 			int o = fp_opt();
 			g_storyMode = false;
 			g_song = o >> 3;
 			g_diff = o & 7;
 			save.lastDiff = g_diff;
-			audio_stop();
 			state_switch(ST_PLAY);
 		}
 		return;
@@ -620,8 +624,7 @@ void charselect_update(float dt) {
 	chr_update(&chill, dt, 100, false);
 	if (chill.finished && !strcmp(chr_anim_name(&chill), "slidein")) chr_play(&chill, "idle", true);
 	if (csChosen) {
-		if (csT > 0.8f) g_fade = clampf((csT - 0.8f) / 0.4f, 0, 1);
-		if (csT > 1.2f) {
+		if (csT > 0.9f) {
 			save.player = csSel;
 			save_write();
 			state_switch(ST_FREEPLAY);
@@ -740,7 +743,7 @@ static void op_sub(void) {
 		int y = 32 + i * 21;
 		bool s = i == opSel;
 		sub_fill(12, y, 232, 18, s ? RGB(0xF9, 0xCF, 0x51) : RGB(60, 40, 90));
-		sub_text(FONT_VCR8O, 20, y + 5, opNames[i], s ? RGB(30, 20, 10) : WHITE);
+		sub_text(FONT_VCR8O, 20, y + 4, opNames[i], s ? RGB(30, 20, 10) : WHITE);
 		const char *v = NULL;
 		switch (i) {
 		case 0: v = save.downscroll ? "ON" : "OFF"; break;
@@ -750,7 +753,7 @@ static void op_sub(void) {
 		case 4: v = save.flashing ? "ON" : "OFF"; break;
 		case 5: snprintf(b, sizeof(b), "< %d ms >", save.noteOffset); v = b; break;
 		}
-		if (v) sub_text(FONT_VCR8O, 236 - strlen(v) * 8, y + 5, v, s ? RGB(30, 20, 10) : RGB(0x33, 0xFF, 0xFF));
+		if (v) sub_text(FONT_VCR8O, 236 - font_width(FONT_VCR8O, v), y + 4, v, s ? RGB(30, 20, 10) : RGB(0x33, 0xFF, 0xFF));
 	}
 }
 

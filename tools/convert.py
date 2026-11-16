@@ -266,6 +266,9 @@ def convert_character(cid_, player):
         anims.append(dict(name=an['name'], fps=float(an.get('frameRate', 24)), loop=bool(an.get('looped', False)),
                           offx=-(off[0] - d['offsets'][0]) * scale, offy=-(off[1] - d['offsets'][1]) * scale,
                           frames=hs, src=src))
+    # flixel keeps the last animation added with a given name (bf-holding-gf
+    # defines singUP twice: the first one is a death animation)
+    anims = [a for i, a in enumerate(anims) if a['name'] not in [b['name'] for b in anims[i + 1:]]]
     names = [a['name'] for a in anims]
     first = 'danceLeft' if 'danceLeft' in names else 'idle'
     if first not in names:
@@ -1543,10 +1546,48 @@ extern const Conversation conversations[];
 extern const int conversation_count;""")
 
 
+def convert_icon():
+    """ROM icon (32x32, 16 colors): the mobile app icon from a Funkin.art checkout
+    (--art=path, default ../funkin-art), else Boyfriend's health icon."""
+    art = OPTS.get('--art') or os.path.join(ROOT, '..', 'funkin-art')
+    src = os.path.join(art, 'icons', 'bf-iOS-Default-1024x1024.png')
+    if os.path.exists(src):
+        im = Image.open(src).convert('RGB')
+        # rounded corners like the app icon, on the yellow background
+        im = im.resize((32, 32), Image.LANCZOS)
+    else:
+        ic = Image.open(os.path.join(A, 'preload', 'images', 'icons', 'icon-bf.png')).convert('RGBA')
+        ic = ic.crop((0, 0, ic.height, ic.height)).resize((32, 32), Image.LANCZOS)
+        im = Image.new('RGB', (32, 32), (0xF9, 0xCF, 0x51))
+        im.paste(ic, (0, 0), ic)
+    q = im.quantize(colors=16, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+    q.save(os.path.join(BUILD, 'icon.bmp'))
+    print('icon from', 'Funkin.art' if os.path.exists(src) else 'icon-bf.png')
+
+
+def convert_title():
+    """Title logo and dancing Girlfriend as streamed .chr sprites (only the
+    current frame is in VRAM, so they can be big)."""
+    ts = 0.26
+    src = Src.get('sparrow', 'preload:logoBumpin')
+    hs = src.anim_frames('logo bumpin', None)
+    f0 = hs[0][2]
+    info = dict(W=f0['fw'], H=f0['fh'], gx=0, gy=0, camx=0, camy=0, sing=8.0, dance=0.0)
+    write_chr('title_logo', [dict(name='idle', fps=24.0, loop=False, offx=0, offy=0, frames=hs, src=src)], info, 1.0, ts, False, False)
+    src = Src.get('sparrow', 'preload:gfDanceTitle')
+    left = src.anim_frames('gfDance', [30] + list(range(15)))
+    right = src.anim_frames('gfDance', list(range(15, 30)))
+    f0 = left[0][2]
+    info = dict(W=f0['fw'], H=f0['fh'], gx=0, gy=0, camx=0, camy=0, sing=8.0, dance=0.0)
+    write_chr('title_gf', [dict(name='danceLeft', fps=24.0, loop=False, offx=0, offy=0, frames=left, src=src),
+                           dict(name='danceRight', fps=24.0, loop=False, offx=0, offy=0, frames=right, src=src)],
+              info, 1.0, ts, False, False)
+
+
 def convert_fonts_all():
     vcr = os.path.join(A, 'fonts', 'vcr.ttf')
-    SH.FONTS[:] = [('vcr8', vcr, 8, 0), ('vcr8o', vcr, 8, 1), ('vcr12', vcr, 12, 0), ('vcr12o', vcr, 12, 1),
-                   ('vcr16o', vcr, 16, 1)]
+    SH.FONTS[:] = [('vcr8', vcr, 10, 0), ('vcr8o', vcr, 10, 1), ('vcr12', vcr, 13, 0), ('vcr12o', vcr, 13, 1),
+                   ('vcr16o', vcr, 18, 1)]
     SH.convert_fonts()
 
 
@@ -1574,6 +1615,8 @@ def main():
     convert_abot()
     convert_videos()
     convert_dialogue()
+    convert_icon()
+    convert_title()
     convert_fonts_all()
     if '--no-audio' not in OPTS:
         convert_audio()

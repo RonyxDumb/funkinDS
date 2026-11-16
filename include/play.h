@@ -69,6 +69,10 @@ typedef struct {
 	float countdownAlpha;
 	int countdownFrame;
 	bool hideOpp;
+	float pauseA;            // pause dim (fades in and out)
+	float flashA;            // camGame flash
+	u16 flashCol;
+	float flashDur;
 	Character abot;         // Nene's speaker
 	// dialogue (week 6)
 	const Conversation *dlg;
@@ -89,3 +93,4 @@ void stage_beat(int beat);
 void stage_step(int step);
 void stage_draw(const Cam *cam);
 void stage_prop_play(const char *prop, const char *anim, bool force);
+void play_flash(u16 color, float dur);   // FlxG.camera.flash on the game camera

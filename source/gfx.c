@@ -16,6 +16,8 @@ typedef struct { u32 off, size; } Block;
 static Block freeList[96];
 static int nFree;
 static u32 chrNext;
+static struct { u32 off, size; } extraSlots[8];
+static int nExtra;
 static u32 palNext;
 
 // ---------------------------------------------------------------------------
@@ -23,6 +25,7 @@ static u32 palNext;
 // ---------------------------------------------------------------------------
 void gfx_reset_vram(void) {
 	nFree = 1;
+	nExtra = 0;
 	freeList[0].off = CHR_REGION;
 	freeList[0].size = TEX_TOTAL - CHR_REGION;
 	chrNext = 0;
@@ -420,7 +423,7 @@ void gfx_queue_upload(u32 texOff, const u8 *src, int w4, int h, int stride) {
 
 void gfx_vblank(void) {
 	if (nUp) {
-		VRAM_A_CR = VRAM_ENABLE | VRAM_A_LCD;
+		u32 saved = vramSetPrimaryBanks(VRAM_A_LCD, VRAM_B_LCD, VRAM_C_SUB_BG, VRAM_D_LCD);
 		int done = 0;
 		u32 bytes = 0;
 		while (done < nUp && (bytes == 0 || bytes + upq[done].w4 * upq[done].h <= UPLOAD_BUDGET)) {
@@ -437,7 +440,7 @@ void gfx_vblank(void) {
 			bytes += u->w4 * u->h;
 			done++;
 		}
-		VRAM_A_CR = VRAM_ENABLE | VRAM_A_TEXTURE_SLOT0;
+		vramRestorePrimaryBanks(saved);
 		for (int i = done; i < nUp; i++) upq[i - done] = upq[i];
 		nUp -= done;
 	}
@@ -456,8 +459,27 @@ void gfx_vblank(void) {
 	}
 }
 
-u32 gfx_chr_slot(u32 size) { return chr_alloc(size); }
-void gfx_chr_reset(void) { chrNext = 0; }
+// character slots live in the first bank; when it is full (big menu
+// sprites) they fall back to the general texture memory (extraSlots)
+
+u32 gfx_chr_slot(u32 size) {
+	u32 o = chr_alloc(size);
+	if (o != 0xFFFFFFFF) return o;
+	chrNext -= (size + 7) & ~7;
+	if (nExtra >= 8) return 0xFFFFFFFF;
+	o = tex_alloc(size);
+	if (o == 0xFFFFFFFF) return o;
+	extraSlots[nExtra].off = o;
+	extraSlots[nExtra].size = size;
+	nExtra++;
+	return o;
+}
+
+void gfx_chr_reset(void) {
+	chrNext = 0;
+	for (int i = 0; i < nExtra; i++) tex_free(extraSlots[i].off, extraSlots[i].size);
+	nExtra = 0;
+}
 
 u32 tex_free_bytes(void) {
 	u32 t = 0;

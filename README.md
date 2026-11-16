@@ -26,7 +26,11 @@ You need Python 3 with Pillow and NumPy, ffmpeg, a C compiler, and [devkitPro](h
 
 ```sh
 git clone --depth 1 https://github.com/FunkinCrew/Funkin.assets funkin-assets
-./build.sh funkin-assets            # converts the assets, then builds FunkinDS.nds
+# optional: the mobile app icon for the ROM icon (else Boyfriend's health icon is used)
+git clone --depth 1 --filter=blob:none --sparse https://github.com/FunkinCrew/Funkin.art funkin-art
+git -C funkin-art sparse-checkout set icons
+python3 tools/convert.py funkin-assets --art=funkin-art
+./build.sh                          # builds FunkinDS.nds
 ```
 
 `tools/convert.py <Funkin.assets>` writes `nitrofiles/`, `maxmod_data/`, `source/gen_assets.c` and `include/gen_assets.h`; `make` (or `./build.sh` with no arguments) builds the ROM. The ROM is about 200 MB (songs are IMA ADPCM streams, the cutscenes 256x192 at 12 fps), so it needs a flashcart or melonDS.

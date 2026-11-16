@@ -237,6 +237,8 @@ extern bool g_titleSeen;
 // fades: 0 = visible, 1 = black
 extern float g_fade;
 extern float g_subFade;
+extern float g_flash;
+void screen_flash(float dur);   // white flash on both screens (honours the flashing lights option)
 
 void menu_music(bool fadeIn);
 

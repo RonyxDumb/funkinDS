@@ -438,7 +438,7 @@ static void dlg_draw(void) {
 	float x0 = HUDX(b->x + b->w * 0.12f), y = HUDY(b->y + b->h * 0.56f), maxw = b->w * 0.76f * KDS;
 	if (x0 < 24) x0 = 24;
 	if (x0 + maxw > 244) maxw = 244 - x0;
-	char line[160];
+	char line[240];
 	line[0] = 0;
 	int ll = 0;
 	const char *p = buf;
@@ -453,7 +453,7 @@ static void dlg_draw(void) {
 		snprintf(test, sizeof(test), "%s%s%s", line, ll ? " " : "", word);
 		if (ll && font_width(FONT_VCR12O, test) > maxw) {
 			font_draw(FONT_VCR12O, x0, y, line, dlg_box_color[l->box], 31);
-			y += 13;
+			y += 14;
 			snprintf(line, sizeof(line), "%s", word);
 		} else snprintf(line, sizeof(line), "%s", test);
 		ll = strlen(line);
@@ -599,7 +599,7 @@ static void draw_sub(void) {
 	if (P.paused) {
 		sub_text_centered(FONT_VCR16O, 128, 10, "PAUSED", WHITE);
 		snprintf(b, sizeof(b), "%s (%s)", P.info->name, diff_name(g_diff));
-		sub_text_centered(FONT_VCR8, 128, 32, b, RGB(200, 200, 220));
+		sub_text_centered(FONT_VCR12O, 128, 34, b, RGB(200, 200, 220));
 		for (int i = 0; i < 3; i++) {
 			int y = 56 + i * 40;
 			sub_fill(28, y, 200, 32, i == pauseSel ? RGB(0xF9, 0xCF, 0x51) : RGB(60, 40, 90));
@@ -607,38 +607,29 @@ static void draw_sub(void) {
 		}
 		return;
 	}
-	sub_text_centered(FONT_VCR16O, 128, 8, P.info->name, WHITE);
+	sub_fill(0, 0, 256, 30, RGB(0x2A, 0x18, 0x50));
+	sub_text_centered(FONT_VCR16O, 128, 6, P.info->name, WHITE);
 	snprintf(b, sizeof(b), "%s - %s", P.info->artist, diff_name(g_diff));
-	sub_text_centered(FONT_VCR8, 128, 30, b, RGB(190, 190, 210));
+	sub_text_centered(FONT_VCR8, 128, 34, b, RGB(190, 190, 210));
 	format_score(sc, P.score);
 	snprintf(b, sizeof(b), "Score: %s", sc);
-	sub_text_centered(FONT_VCR12O, 128, 58, b, WHITE);
+	sub_text_centered(FONT_VCR16O, 128, 52, b, RGB(0xF9, 0xCF, 0x51));
 	int total = P.judged[0] + P.judged[1] + P.judged[2] + P.judged[3] + P.misses;
 	float acc = total ? (P.judged[0] + P.judged[1] * 0.75f + P.judged[2] * 0.4f + P.judged[3] * 0.1f) / total * 100 : 100;
-	snprintf(b, sizeof(b), "Misses: %d   Accuracy: %d.%02d%%", P.misses, (int)acc, (int)(acc * 100) % 100);
-	sub_text_centered(FONT_VCR8, 128, 80, b, WHITE);
-	snprintf(b, sizeof(b), "Combo: %d   Max: %d", P.combo, P.maxCombo);
-	sub_text_centered(FONT_VCR8, 128, 96, b, WHITE);
+	snprintf(b, sizeof(b), "Misses: %d  Acc: %d.%02d%%", P.misses, (int)acc, (int)(acc * 100) % 100);
+	sub_text_centered(FONT_VCR12O, 128, 78, b, WHITE);
+	snprintf(b, sizeof(b), "Combo: %d  (max %d)", P.combo, P.maxCombo);
+	sub_text_centered(FONT_VCR12O, 128, 96, b, WHITE);
 	static const char *jn[4] = { "Sick", "Good", "Bad", "Shit" };
 	static const u16 jc[4] = { RGB(80, 220, 255), RGB(120, 255, 120), RGB(255, 200, 80), RGB(255, 100, 100) };
 	for (int i = 0; i < 4; i++) {
+		int x = 14 + (i & 1) * 120, y = 118 + (i >> 1) * 18;
+		sub_fill(x, y - 2, 108, 16, RGB(0x22, 0x14, 0x40));
 		snprintf(b, sizeof(b), "%s: %d", jn[i], P.judged[i]);
-		sub_text(FONT_VCR8, 20 + i * 58, 120, b, jc[i]);
+		sub_text(FONT_VCR12O, x + 6, y, b, jc[i]);
 	}
-	if (save.botplay) sub_text_centered(FONT_VCR12O, 128, 146, "BOTPLAY", RGB(255, 255, 120));
-#ifdef DEBUG_HUD
-	{
-		extern int perf_drops, perf_frames;
-		snprintf(b, sizeof(b), "vram free %d  drops %d/%d", (int)tex_free_bytes(), perf_drops, perf_frames);
-		sub_text(FONT_VCR8, 2, 160, b, RGB(255, 255, 0));
-		snprintf(b, sizeof(b), "sheets %d%d%d%d%d%d chr %d%d%d", P.shNotes.loaded, P.shSplash.loaded, P.shPopup.loaded,
-			P.shCountdown.loaded, P.shIcon[0].loaded, P.shIcon[1].loaded, P.chr[0].slot != NULL, P.chr[1].slot != NULL, P.chr[2].slot != NULL);
-		sub_text(FONT_VCR8, 2, 168, b, RGB(255, 255, 0));
-		snprintf(b, sizeof(b), "cam %d,%d z %d.%02d", (int)P.camX, (int)P.camY, (int)P.cam.zoom, (int)(P.cam.zoom * 100) % 100);
-		sub_text(FONT_VCR8, 2, 152, b, RGB(255, 255, 0));
-	}
-#endif
-	sub_text_centered(FONT_VCR8, 128, 176, "START: pause", RGB(150, 140, 170));
+	if (save.botplay) sub_text_centered(FONT_VCR12O, 128, 158, "BOTPLAY", RGB(255, 255, 120));
+	sub_text_centered(FONT_VCR8, 128, 178, "START: pause", RGB(150, 140, 170));
 }
 
 // ---------------------------------------------------------------------------
@@ -734,8 +725,17 @@ static void countdown_tick(int k) {
 	}
 }
 
+void play_flash(u16 color, float dur) {
+	if (!save.flashing) return;
+	P.flashCol = color;
+	P.flashA = 1;
+	P.flashDur = dur;
+}
+
 void play_update(float dt) {
 	if (P.dead || !P.chart) return;
+	P.pauseA += ((P.paused ? 0.65f : 0) - P.pauseA) * fps_ratio(0.3f, dt);
+	if (P.flashA > 0) P.flashA -= dt / P.flashDur;
 	if (P.paused) {
 		update_pause();
 		if (subDirty) { draw_sub(); subDirty = false; }
@@ -978,6 +978,7 @@ static void draw_healthbar(void) {
 void play_draw(void) {
 	if (!P.chart) return;
 	stage_draw(&P.cam);
+	if (P.flashA > 0.01f) gfx_rect(0, 24, 256, 168, P.flashCol, A31(P.flashA > 0.96f ? 0.96f : P.flashA));
 	// letterbox: the game camera shows exactly the 1280x720 view of the game
 	// (alpha 30: translucent polygons keep the drawing order on the DS 3D engine)
 	gfx_rect(0, 0, 256, 24, RGB(0, 0, 0), 30);
@@ -996,5 +997,5 @@ void play_draw(void) {
 	if (P.countdownAlpha > 0.01f && P.shCountdown.loaded)
 		sheet_draw(&P.shCountdown, P.countdownFrame, 128, 96, KDS * 0.6f, WHITE, A31(P.countdownAlpha));
 	if (P.dlg) dlg_draw();
-	if (P.paused) gfx_rect(0, 0, 256, 192, 0, A31(0.6f));
+	if (P.pauseA > 0.01f) gfx_rect(0, 0, 256, 192, 0, A31(P.pauseA));
 }

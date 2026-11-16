@@ -152,6 +152,7 @@ void stage_unload(void) {
 static void lightning(bool sound, int beat) {
 	if (sound) audio_sfx(rand() & 1 ? SFX_THUNDER1 : SFX_THUNDER2, 1);
 	stage_prop_play("halloweenBG", "lightning", true);
+	play_flash(WHITE, 0.35f);
 	lightningBeat = beat;
 	lightningOffset = irand_range(8, 24);
 	Character *bf = P.chars[ROLE_BF], *gf = P.chars[ROLE_GF];

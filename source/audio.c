@@ -291,3 +291,9 @@ void audio_sfx_pitch(int id, float v, float pitch) {
 
 void audio_sfx(int id, float v) { audio_sfx_pitch(id, v, 1); }
 
+
+void audio_debug(char *buf, int n) {
+	Track *v = &tr[TR_VOICES], *m = &tr[TR_MUSIC];
+	snprintf(buf, n, "inst %d/%d voc o%d a%d v%d fill %d c%d", (int)(m->w - m->r), (int)m->consumed / 1000,
+		v->open, v->active, v->vol, (int)(v->w - v->r), (int)v->consumed / 1000);
+}
