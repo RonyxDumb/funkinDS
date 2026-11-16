@@ -1,0 +1,62 @@
+name: Build NDS
+
+# Builds FunkinDS.nds from the official game assets.
+# The assets are not redistributable (see the Funkin.assets license): the ROM
+# is only uploaded as a workflow artifact, never published as a release.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the game assets
+        run: |
+          git clone --depth 1 https://github.com/FunkinCrew/Funkin.assets funkin-assets
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/FunkinCrew/Funkin.art funkin-art
+          git -C funkin-art sparse-checkout set icons
+          echo "ASSETS_SHA=$(git -C funkin-assets rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the converter tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install pillow numpy
+
+      # the conversion (audio, videos) is slow: reuse it while the assets and
+      # the converter do not change
+      - name: Cache the converted assets
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            nitrofiles
+            maxmod_data
+            build_tools/icon.bmp
+            source/gen_assets.c
+            include/gen_assets.h
+          key: assets-${{ env.ASSETS_SHA }}-${{ hashFiles('tools/**') }}
+
+      - name: Convert the assets
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: python3 tools/convert.py funkin-assets --art=funkin-art
+
+      - name: Build the ROM
+        run: docker run --rm -v "$PWD":/src -w /src devkitpro/devkitarm make
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FunkinDS
+          path: FunkinDS.nds
+          compression-level: 0

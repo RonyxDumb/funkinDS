@@ -110,6 +110,7 @@ static const s16 adpSteps[89] = {
 	7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767 };
 static const s8 adpIdx[16] = { -1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8 };
 
+ITCM_CODE __attribute__((target("arm"), noinline))
 static void adpcm_block(const u8 *b, s16 *out) {
 	int pred = (s16)(b[0] | (b[1] << 8));
 	int idx = b[2];
@@ -175,11 +176,16 @@ void audio_init(void) {
 static bool track_done(Track *t) { return t->open && t->eof && t->r + 1 >= t->w; }
 
 void audio_update(void) {
-	for (int i = 0; i < TR_COUNT; i++) {
-		Track *t = &tr[i];
-		if (!t->open) continue;
+	// one ADPCM block (2048 samples = 6 frames of audio) for one track per
+	// frame, alternating: keeps the per-frame cost small and constant
+	static int which;
+	for (int k = 0; k < TR_COUNT; k++) {
+		Track *t = &tr[(which + k) % TR_COUNT];
+		if (!t->open || t->eof || RING - (t->w - t->r) - 4 < ADP_SAMPLES) continue;
 		track_fill(t, 1);
+		break;
 	}
+	which = (which + 1) % TR_COUNT;
 	if (fading) {
 		static u32 last;
 		u32 now = ticks_now();

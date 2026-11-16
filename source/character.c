@@ -8,6 +8,34 @@ static const char *dirNames[4] = { "LEFT", "DOWN", "UP", "RIGHT" };
 static ChrSlot slots[8];
 static int nSlots;
 
+// LZ77 (BIOS type 0x10) decoder in ITCM, ARM code: several times faster than
+// the BIOS call
+ITCM_CODE __attribute__((target("arm"), noinline))
+static void lz77_decode(const u8 *src, u8 *dst) {
+	u32 n = src[1] | (src[2] << 8) | (src[3] << 16);
+	src += 4;
+	u8 *end = dst + n;
+	while (dst < end) {
+		u32 flags = *src++;
+		for (int b = 0; b < 8 && dst < end; b++, flags <<= 1) {
+			if (flags & 0x80) {
+				u32 b0 = src[0], b1 = src[1];
+				src += 2;
+				u32 len = (b0 >> 4) + 3;
+				const u8 *p = dst - ((((b0 & 15) << 8) | b1) + 1);
+				if (dst + len > end) len = end - dst;
+				while (len--) *dst++ = *p++;
+			} else *dst++ = *src++;
+		}
+	}
+}
+
+// decompression budget per frame (bytes): characters whose new frame does
+// not fit keep showing their previous frame for one more frame
+#define DECOMP_BUDGET (24 * 1024)
+static int decompBudget = DECOMP_BUDGET;
+void chr_frame_begin(void) { decompBudget = DECOMP_BUDGET; }
+
 void chr_slots_reset(void) {
 	for (int i = 0; i < nSlots; i++) free(slots[i].buf);
 	nSlots = 0;
@@ -206,16 +234,25 @@ void chr_draw(Character *c, const Cam *cam) {
 	int uf = c->seq[a->start + c->frameIdx];
 	const ChrFrameRec *f = &c->frames[uf];
 	ChrSlot *s = c->slot;
+	if (s->owner == c->data && s->frame != uf && s->frame >= 0 && decompBudget < f->w4 * f->h) {
+		uf = s->frame;              // over budget: previous frame
+		f = &c->frames[uf];
+	}
 	if (s->owner != c->data || s->frame != uf) {
 		const u8 *src = c->data + c->hdr->offPix + f->off;
-		swiDecompressLZSSWram((void *)src, s->buf);
+		u32 t0 = time_ticks();
+		lz77_decode(src, s->buf);
+		decompBudget -= f->w4 * f->h;
+		prof_add(PF_DECOMP, t0);
 		DC_FlushRange(s->buf, f->w4 * f->h);   // the vblank upload uses DMA
 		gfx_queue_upload(s->off, s->buf, f->w4, f->h, 8 << s->wlog);
 		s->owner = c->data;
 		s->frame = uf;
+		s->offx = a->offx;
+		s->offy = a->offy;
 	}
-	float wx0 = c->x + a->offx + f->dx;
-	float wy0 = c->y + a->offy + f->dy;
+	float wx0 = c->x + s->offx + f->dx;
+	float wy0 = c->y + s->offy + f->dy;
 	float x0 = cam_sx(cam, wx0, c->sfx), y0 = cam_sy(cam, wy0, c->sfy);
 	float x1 = cam_sx(cam, wx0 + f->ww, c->sfx), y1 = cam_sy(cam, wy0 + f->wh, c->sfy);
 	u32 tp = (s->off >> 3) | (s->wlog << 20) | (s->hlog << 23) | (GL_RGB256 << 26) | GL_TEXTURE_COLOR0_TRANSPARENT;

@@ -35,6 +35,10 @@ python3 tools/convert.py funkin-assets --art=funkin-art
 
 `tools/convert.py <Funkin.assets>` writes `nitrofiles/`, `maxmod_data/`, `source/gen_assets.c` and `include/gen_assets.h`; `make` (or `./build.sh` with no arguments) builds the ROM. The ROM is about 200 MB (songs are IMA ADPCM streams, the cutscenes 256x192 at 12 fps), so it needs a flashcart or melonDS.
 
+### GitHub Actions
+
+`.github/workflows/build.yml` builds the ROM on every push: it downloads Funkin.assets (and the icon from Funkin.art), converts them (the result is cached until the assets or the converter change, the first run takes a while) and uploads `FunkinDS.nds` as a workflow artifact. Since the game assets are not redistributable, the ROM is never attached to a public release.
+
 ## Playing
 
 Copy `FunkinDS.nds` to your flashcart (TWiLight Menu++ / nds-bootstrap) or open it in **melonDS**.

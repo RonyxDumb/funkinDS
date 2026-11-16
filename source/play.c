@@ -9,7 +9,7 @@ PlayState P;
 #define DS_VIEW 0.75f             // the whole 16:9 view in 256x144 (letterboxed)               // DS px between player lanes
 static const u32 laneKeys[4] = { KEY_LEFT | KEY_Y, KEY_DOWN | KEY_B, KEY_UP | KEY_X, KEY_RIGHT | KEY_A };
 static bool subDirty;
-static int subTimer;
+static bool subStatic;     // bottom screen static part drawn
 static int pauseSel;
 static float botHoldEnd[4];
 
@@ -376,6 +376,7 @@ static void dlg_end(void) {
 	P.dlg = NULL;
 	sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin, false);
 	subDirty = true;
+	subStatic = false;
 }
 
 static void dlg_start(void) {
@@ -477,6 +478,7 @@ void play_enter(void) {
 	g_fade = 1;
 	audio_stop();
 	memset(&P, 0, sizeof(P));
+	subStatic = false;
 	P.info = &song_info[g_song];
 	// story mode start cutscene (songs/darnell.hxc)
 	const Cutscene *cs = g_storyMode && !g_cutsceneDone ? cutscene_for(P.info->tag, false) : NULL;
@@ -593,10 +595,76 @@ void play_leave(void) {
 // ---------------------------------------------------------------------------
 static const char *pauseItems[3] = { "Resume", "Restart Song", "Exit to menu" };
 
-static void draw_sub(void) {
-	sub_clear(RGB(20, 12, 40));
+// The bottom screen is drawn incrementally: the static part once, then at
+// most one changed field per frame (software text drawing is slow).
+#define SUB_BG RGB(20, 12, 40)
+enum { SF_SCORE, SF_MISSES, SF_COMBO, SF_J0, SF_J1, SF_J2, SF_J3, SF_DEBUG, SF_COUNT };
+static int subVal[SF_COUNT];
+static int subField;
+
+static int sub_value(int f) {
+	switch (f) {
+	case SF_SCORE: return P.score;
+	case SF_MISSES: return P.misses * 100000 + P.judged[0] + P.judged[1] * 7 + P.judged[2] * 131 + P.judged[3] * 2003;
+	case SF_COMBO: return P.combo * 10000 + P.maxCombo;
+	case SF_DEBUG: return P.curBeat;
+	default: return P.judged[f - SF_J0];
+	}
+}
+
+static void sub_draw_field(int f) {
 	char b[64], sc[24];
+	static const char *jn[4] = { "Sick", "Good", "Bad", "Shit" };
+	static const u16 jc[4] = { RGB(80, 220, 255), RGB(120, 255, 120), RGB(255, 200, 80), RGB(255, 100, 100) };
+	switch (f) {
+	case SF_SCORE:
+		sub_fill(0, 50, 256, 22, SUB_BG);
+		format_score(sc, P.score);
+		snprintf(b, sizeof(b), "Score: %s", sc);
+		sub_text_centered(FONT_VCR16O, 128, 52, b, RGB(0xF9, 0xCF, 0x51));
+		break;
+	case SF_MISSES: {
+		sub_fill(0, 76, 256, 17, SUB_BG);
+		int total = P.judged[0] + P.judged[1] + P.judged[2] + P.judged[3] + P.misses;
+		float acc = total ? (P.judged[0] + P.judged[1] * 0.75f + P.judged[2] * 0.4f + P.judged[3] * 0.1f) / total * 100 : 100;
+		snprintf(b, sizeof(b), "Misses: %d  Acc: %d.%02d%%", P.misses, (int)acc, (int)(acc * 100) % 100);
+		sub_text_centered(FONT_VCR12O, 128, 78, b, WHITE);
+		break;
+	}
+	case SF_COMBO:
+		sub_fill(0, 94, 256, 17, SUB_BG);
+		snprintf(b, sizeof(b), "Combo: %d  (max %d)", P.combo, P.maxCombo);
+		sub_text_centered(FONT_VCR12O, 128, 96, b, WHITE);
+		break;
+	case SF_J0: case SF_J1: case SF_J2: case SF_J3: {
+		int i = f - SF_J0;
+		int x = 14 + (i & 1) * 120, y = 118 + (i >> 1) * 18;
+		sub_fill(x, y - 2, 108, 16, RGB(0x22, 0x14, 0x40));
+		snprintf(b, sizeof(b), "%s: %d", jn[i], P.judged[i]);
+		sub_text(FONT_VCR12O, x + 6, y, b, jc[i]);
+		break;
+	}
+	case SF_DEBUG:
+#ifdef DEBUG_HUD
+		sub_fill(0, 158, 256, 34, RGB(0, 0, 0));
+		snprintf(b, sizeof(b), "u%d d%d v%d s%d a%d", (int)prof_show[PF_UPDATE], (int)prof_show[PF_DRAW], (int)prof_show[PF_VBLANK], (int)prof_show[PF_SUB], (int)prof_show[PF_AUDIO]);
+		sub_text(FONT_VCR8, 2, 160, b, RGB(255, 255, 0));
+		snprintf(b, sizeof(b), "lz%d sub%d frame%d free%d", (int)prof_show[PF_DECOMP], (int)prof_show[PF_SUBDRAW], (int)prof_show[PF_FRAME], (int)tex_free_bytes());
+		sub_text(FONT_VCR8, 2, 171, b, RGB(255, 255, 0));
+		extern int perf_drops, perf_frames;
+		snprintf(b, sizeof(b), "drops %d/%d", perf_drops, perf_frames);
+		sub_text(FONT_VCR8, 2, 182, b, RGB(255, 255, 0));
+#endif
+		break;
+	}
+	subVal[f] = sub_value(f);
+}
+
+static void draw_sub(void) {
+	char b[64];
+	sub_clear(SUB_BG);
 	if (P.paused) {
+		subStatic = false;
 		sub_text_centered(FONT_VCR16O, 128, 10, "PAUSED", WHITE);
 		snprintf(b, sizeof(b), "%s (%s)", P.info->name, diff_name(g_diff));
 		sub_text_centered(FONT_VCR12O, 128, 34, b, RGB(200, 200, 220));
@@ -611,25 +679,25 @@ static void draw_sub(void) {
 	sub_text_centered(FONT_VCR16O, 128, 6, P.info->name, WHITE);
 	snprintf(b, sizeof(b), "%s - %s", P.info->artist, diff_name(g_diff));
 	sub_text_centered(FONT_VCR8, 128, 34, b, RGB(190, 190, 210));
-	format_score(sc, P.score);
-	snprintf(b, sizeof(b), "Score: %s", sc);
-	sub_text_centered(FONT_VCR16O, 128, 52, b, RGB(0xF9, 0xCF, 0x51));
-	int total = P.judged[0] + P.judged[1] + P.judged[2] + P.judged[3] + P.misses;
-	float acc = total ? (P.judged[0] + P.judged[1] * 0.75f + P.judged[2] * 0.4f + P.judged[3] * 0.1f) / total * 100 : 100;
-	snprintf(b, sizeof(b), "Misses: %d  Acc: %d.%02d%%", P.misses, (int)acc, (int)(acc * 100) % 100);
-	sub_text_centered(FONT_VCR12O, 128, 78, b, WHITE);
-	snprintf(b, sizeof(b), "Combo: %d  (max %d)", P.combo, P.maxCombo);
-	sub_text_centered(FONT_VCR12O, 128, 96, b, WHITE);
-	static const char *jn[4] = { "Sick", "Good", "Bad", "Shit" };
-	static const u16 jc[4] = { RGB(80, 220, 255), RGB(120, 255, 120), RGB(255, 200, 80), RGB(255, 100, 100) };
-	for (int i = 0; i < 4; i++) {
-		int x = 14 + (i & 1) * 120, y = 118 + (i >> 1) * 18;
-		sub_fill(x, y - 2, 108, 16, RGB(0x22, 0x14, 0x40));
-		snprintf(b, sizeof(b), "%s: %d", jn[i], P.judged[i]);
-		sub_text(FONT_VCR12O, x + 6, y, b, jc[i]);
-	}
 	if (save.botplay) sub_text_centered(FONT_VCR12O, 128, 158, "BOTPLAY", RGB(255, 255, 120));
+#ifndef DEBUG_HUD
 	sub_text_centered(FONT_VCR8, 128, 178, "START: pause", RGB(150, 140, 170));
+#endif
+	for (int f = 0; f < SF_COUNT; f++) sub_draw_field(f);
+	subStatic = true;
+}
+
+// one field per frame, only when its value changed
+static void sub_update(void) {
+	if (!subStatic) { draw_sub(); return; }
+	for (int k = 0; k < SF_COUNT; k++) {
+		int f = (subField + k) % SF_COUNT;
+		if (sub_value(f) != subVal[f]) {
+			sub_draw_field(f);
+			subField = (f + 1) % SF_COUNT;
+			return;
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -640,6 +708,7 @@ static void pause_select(void) {
 	case 0:
 		P.paused = false;
 		if (P.started) audio_pause_song(false);
+		subStatic = false;
 		break;
 	case 1: state_switch(ST_PLAY); break;
 	case 2:
@@ -863,10 +932,12 @@ void play_update(float dt) {
 		state_switch(ST_GAMEOVER);
 		return;
 	}
-	if (subDirty && ++subTimer >= 4) {
-		draw_sub();
+	{
+		u32 t0 = time_ticks();
+		if (subDirty && !subStatic) draw_sub();
+		else sub_update();
 		subDirty = false;
-		subTimer = 0;
+		prof_add(PF_SUBDRAW, t0);
 	}
 }
 

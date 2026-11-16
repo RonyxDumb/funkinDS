@@ -21,6 +21,7 @@ typedef struct {
 	const void *owner;
 	int frame;
 	u8 *buf;               // decompressed frame
+	float offx, offy;      // animation offset of the uploaded frame
 } ChrSlot;
 
 enum { ROLE_BF, ROLE_GF, ROLE_DAD, ROLE_OTHER };
@@ -53,6 +54,7 @@ typedef struct {
 } Character;
 
 void chr_slots_reset(void);
+void chr_frame_begin(void);    // per frame decompression budget
 ChrSlot *chr_slot_new(int wlog, int hlog);
 bool chr_load(Character *c, const char *tag, int role);
 void chr_unload(Character *c);

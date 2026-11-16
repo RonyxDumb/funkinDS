@@ -5,6 +5,16 @@
 static u16 *fb;      // RAM back buffer
 static u16 *vfb;     // VRAM
 static volatile bool subDirtyFlag;
+static int dirtyY0 = 0, dirtyY1 = 192;     // rows to copy to VRAM
+
+static inline void mark_rows(int y0, int y1) {
+	if (y0 < 0) y0 = 0;
+	if (y1 > 192) y1 = 192;
+	if (y0 >= y1) return;
+	if (!subDirtyFlag) { dirtyY0 = y0; dirtyY1 = y1; }
+	else { if (y0 < dirtyY0) dirtyY0 = y0; if (y1 > dirtyY1) dirtyY1 = y1; }
+	subDirtyFlag = true;
+}
 
 void sub_init(void) {
 	videoSetModeSub(MODE_5_2D);
@@ -20,20 +30,22 @@ void sub_clear(u16 color) {
 	u32 c = (color | 0x8000) | ((u32)(color | 0x8000) << 16);
 	u32 *p = (u32 *)fb;
 	for (int i = 0; i < 256 * 192 / 2; i++) p[i] = c;
-	subDirtyFlag = true;
+	mark_rows(0, 192);
 }
 
+// only the rows that changed are copied (a full copy takes ~2.5 ms)
 void sub_present(void) {
 	if (!subDirtyFlag) return;
-	DC_FlushRange(fb, 256 * 192 * 2);
-	dmaCopyWords(3, fb, vfb, 256 * 192 * 2);
+	int n = (dirtyY1 - dirtyY0) * 512;
+	DC_FlushRange(fb + dirtyY0 * 256, n);
+	dmaCopyWords(3, fb + dirtyY0 * 256, vfb + dirtyY0 * 256, n);
 	subDirtyFlag = false;
 }
 
-void sub_mark(void) { subDirtyFlag = true; }
+void sub_mark(void) { mark_rows(0, 192); }
 
 void sub_fill(int x, int y, int w, int h, u16 color) {
-	subDirtyFlag = true;
+	mark_rows(y, y + h);
 	if (x < 0) { w += x; x = 0; }
 	if (y < 0) { h += y; y = 0; }
 	if (x + w > 256) w = 256 - x;
@@ -54,7 +66,7 @@ static inline u16 blend15(u16 d, u16 s, int a) {
 }
 
 void sub_fill_blend(int x, int y, int w, int h, u16 color, int a) {
-	subDirtyFlag = true;
+	mark_rows(0, 192);
 	if (x < 0) { w += x; x = 0; }
 	if (y < 0) { h += y; y = 0; }
 	if (x + w > 256) w = 256 - x;
@@ -83,7 +95,7 @@ void img_free(Img16 *img) {
 }
 
 void sub_blit(const Img16 *img, int x, int y) {
-	subDirtyFlag = true;
+	mark_rows(0, 192);
 	if (!img->px) return;
 	for (int j = 0; j < img->h; j++) {
 		int yy = y + j;
@@ -99,7 +111,7 @@ void sub_blit(const Img16 *img, int x, int y) {
 }
 
 void sub_blit_alpha(const Img16 *img, int x, int y, int a) {
-	subDirtyFlag = true;
+	mark_rows(0, 192);
 	if (!img->px || a <= 0) return;
 	if (a > 31) a = 31;
 	for (int j = 0; j < img->h; j++) {
@@ -123,7 +135,7 @@ void sub_rect(int x, int y, int w, int h, u16 color) {
 }
 
 void sub_blit_flip(const Img16 *img, int x, int y) {
-	subDirtyFlag = true;
+	mark_rows(0, 192);
 	if (!img->px) return;
 	for (int j = 0; j < img->h; j++) {
 		int yy = y + j;
@@ -140,7 +152,7 @@ void sub_blit_flip(const Img16 *img, int x, int y) {
 
 // multiplies the image by a tint color, only the first clipw columns
 void sub_blit_tint(const Img16 *img, int x, int y, int clipw, u16 tint) {
-	subDirtyFlag = true;
+	mark_rows(0, 192);
 	if (!img->px) return;
 	int tr = (tint & 31) + 1, tg = ((tint >> 5) & 31) + 1, tb = ((tint >> 10) & 31) + 1;
 	if (clipw > img->w) clipw = img->w;
@@ -161,27 +173,37 @@ void sub_blit_tint(const Img16 *img, int x, int y, int clipw, u16 tint) {
 }
 
 void sub_text(int fid, int x, int y, const char *s, u16 color) {
-	subDirtyFlag = true;
 	Font *f = font_get(fid);
 	if (!f->alpha) font_load(fid, false);
 	if (!f->alpha) return;
 	const FontDef *d = font_defs[fid];
+	mark_rows(y - 4, y + d->lineh + 6);
 	int aw = 8 << d->wlog;
+	// glyph texel (A3I5: 3 bit alpha, 5 bit luminance) -> color, per call
+	static u16 lum[32];
+	static const u8 alphaOf[8] = { 0, 4, 9, 13, 18, 22, 27, 31 };
+	for (int l = 0; l < 32; l++) {
+		int k = l + 1;
+		lum[l] = (((color & 31) * k) >> 5) | (((((color >> 5) & 31) * k) >> 5) << 5) | (((((color >> 10) & 31) * k) >> 5) << 10);
+	}
 	for (; *s; s++) {
 		int c = (u8)*s;
 		if (c < 32 || c > 126) c = '?';
 		const Glyph *g = &d->glyphs[c - 32];
+		int x0 = x + g->ox;
 		for (int j = 0; j < g->h; j++) {
 			int yy = y + g->oy + j;
 			if (yy < 0 || yy >= 192) continue;
 			const u8 *a = f->alpha + (g->y + j) * aw + g->x;
 			u16 *p = fb + yy * 256;
 			for (int i = 0; i < g->w; i++) {
-				int xx = x + g->ox + i;
-				if (xx < 0 || xx >= 256 || !a[i]) continue;
-				int al = (a[i] >> 5) * 31 / 7, l = (a[i] & 31) + 1;
-				u16 c = (((color & 31) * l) >> 5) | (((((color >> 5) & 31) * l) >> 5) << 5) | (((((color >> 10) & 31) * l) >> 5) << 10);
-				p[xx] = blend15(p[xx], c, al);
+				int v = a[i];
+				if (!v) continue;
+				int xx = x0 + i;
+				if ((unsigned)xx >= 256) continue;
+				int al = alphaOf[v >> 5];
+				u16 sc = lum[v & 31];
+				p[xx] = al >= 31 ? (sc | 0x8000) : blend15(p[xx], sc, al);
 			}
 		}
 		x += g->adv;

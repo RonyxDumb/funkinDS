@@ -238,7 +238,14 @@ extern bool g_titleSeen;
 extern float g_fade;
 extern float g_subFade;
 extern float g_flash;
-void screen_flash(float dur);   // white flash on both screens (honours the flashing lights option)
+void screen_flash(float dur);
+
+// profiler (DEBUG_HUD): max microseconds per section over the last second
+enum { PF_UPDATE, PF_DRAW, PF_VBLANK, PF_SUB, PF_AUDIO, PF_DECOMP, PF_SUBDRAW, PF_FRAME, PF_COUNT };
+extern u32 prof_max[PF_COUNT], prof_show[PF_COUNT];
+u32 time_ticks(void);
+static inline u32 prof_us(u32 t0) { return (u32)((u64)(time_ticks() - t0) * 1000000 / TICK_FREQ); }
+static inline void prof_add(int k, u32 t0) { u32 u = prof_us(t0); if (u > prof_max[k]) prof_max[k] = u; }   // white flash on both screens (honours the flashing lights option)
 
 void menu_music(bool fadeIn);
 

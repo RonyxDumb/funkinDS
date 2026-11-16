@@ -1,5 +1,6 @@
 // Funkin DS - entry point, state machine, save data
 #include "engine.h"
+#include "character.h"
 #include <filesystem.h>
 #include <fat.h>
 
@@ -17,6 +18,8 @@ int g_weekScore = 0;
 int g_optionsReturn = ST_MAINMENU;
 bool g_titleSeen = false;
 Results g_results;
+u32 prof_max[PF_COUNT], prof_show[PF_COUNT];
+static int profFrames;
 const char *g_video;
 int g_videoNext;
 bool g_cutsceneDone;
@@ -220,7 +223,9 @@ int main(int argc, char **argv) {
 				continue;
 			}
 		} else {
+			u32 t0 = time_ticks();
 			states[curState].update(dt);
+			prof_add(PF_UPDATE, t0);
 			if (trans == 2 && nextState < 0) {
 				g_fade -= dt / 0.3f;
 				if (g_fade <= 0) { g_fade = 0; trans = 0; }
@@ -229,14 +234,23 @@ int main(int argc, char **argv) {
 		tween_update(dt);
 		if (g_flash > 0) g_flash -= dt / flashDur;
 
+		u32 t1 = time_ticks();
 		gfx_frame_begin();
+		chr_frame_begin();
 		states[curState].draw();
 		gfx_frame_end();
+		prof_add(PF_DRAW, t1);
+		prof_add(PF_FRAME, now);
 
 		swiWaitForVBlank();
+		t1 = time_ticks();
 		gfx_vblank();
 		video_vblank();
+		prof_add(PF_VBLANK, t1);
+		t1 = time_ticks();
 		sub_present();
+		prof_add(PF_SUB, t1);
+		if (++profFrames >= 60) { memcpy(prof_show, prof_max, sizeof(prof_max)); memset(prof_max, 0, sizeof(prof_max)); profFrames = 0; }
 		// master brightness: smoothstep fades to black, white flashes
 		float fa = clampf(g_fade, 0, 1), fs = clampf(g_fade > g_subFade ? g_fade : g_subFade, 0, 1);
 		fa = fa * fa * (3 - 2 * fa);
@@ -245,7 +259,9 @@ int main(int argc, char **argv) {
 		int w = (int)(clampf(g_flash, 0, 1) * 16 + 0.5f);
 		REG_MASTER_BRIGHT = b ? ((2 << 14) | b) : w ? ((1 << 14) | w) : 0;
 		REG_MASTER_BRIGHT_SUB = bs ? ((2 << 14) | bs) : w ? ((1 << 14) | w) : 0;
+		t1 = time_ticks();
 		audio_update();
+		prof_add(PF_AUDIO, t1);
 	}
 	return 0;
 }
