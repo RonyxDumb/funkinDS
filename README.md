@@ -147,7 +147,7 @@ The output is **`Funkin3DS.3dsx`** at the root of the repository, approximately 
 
 ## Playing
 
-Copy `Funkin3DS.3dsx` to `/3ds/` on the SD card and start it from the **Homebrew Launcher** (a 3DS with custom firmware, e.g. Luma3DS). Sound needs the DSP firmware dump (`/3ds/dspfirm.cdc`, made by DSP1 once); without it the game runs silently. In **Azahar**, open the `.3dsx` with *File > Load File*.
+Copy `Funkin3DS.3dsx` to `/3ds/` on the SD card and start it from the **Homebrew Launcher** (a 3DS with custom firmware, e.g. Luma3DS). On a console, sound needs the DSP firmware dump (`/3ds/dspfirm.cdc`, made once with the DSP1 homebrew); without it the title screen shows a "NO SOUND" warning. Emulators (Azahar, Citra, Lime3DS) do not need it. In **Azahar**, open the `.3dsx` with *File > Load File*.
 
 | Action | Buttons |
 | --- | --- |

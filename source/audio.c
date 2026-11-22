@@ -281,7 +281,19 @@ void audio_init(void) {
 		track_close(&tr[i]);
 	}
 	fakeStart = time_ticks();
-	if (R_FAILED(ndspInit())) return;    // no DSP firmware dump: silent
+	Result rc = ndspInit();
+	if (R_FAILED(rc)) {
+		// No /3ds/dspfirm.cdc on the SD card. Emulators (Citra / Lime3DS /
+		// Azahar) emulate the DSP at a high level and ignore the firmware, so
+		// a dummy one is enough there; a real console needs the DSP1 dump.
+		s64 emu = 0;
+		if (R_SUCCEEDED(svcGetSystemInfo(&emu, 0x20000, 0)) && emu) {
+			static u8 dummy[4096];
+			ndspUseComponent(dummy, sizeof(dummy), 0xFF, 0xFF);
+			rc = ndspInit();
+		}
+	}
+	if (R_FAILED(rc)) return;    // no DSP firmware: silent
 	ok = true;
 	ndspSetOutputMode(NDSP_OUTPUT_STEREO);
 	for (int i = 0; i < TR_COUNT; i++)

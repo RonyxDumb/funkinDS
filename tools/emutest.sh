@@ -14,9 +14,6 @@ cat > "$DIR/run.sh" <<'EOS'
 Xvfb :99 -screen 0 1280x1024x24 >/dev/null 2>&1 &
 sleep 2
 export DISPLAY=:99 HOME=/tmp/home
-# ndspInit needs a DSP firmware file on the SD card (the emulator's HLE DSP ignores its content)
-mkdir -p $HOME/.local/share/azahar-emu/sdmc/3ds
-head -c 4096 /dev/zero > $HOME/.local/share/azahar-emu/sdmc/3ds/dspfirm.cdc
 timeout -k 5 -s TERM "$1" azahar -d /emu/out.mkv /emu/game.3dsx > /emu/log.txt 2>&1 || true
 EOS
 docker run --rm -v "$DIR":/emu --entrypoint sh linuxserver/azahar /emu/run.sh "$SECS" || true

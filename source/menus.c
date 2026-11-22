@@ -60,6 +60,11 @@ void title_enter(void) {
 	sub_text_centered(FONT_VCR16O, BW / 2, 84, "Friday Night Funkin'", WHITE);
 	sub_text_centered(FONT_VCR16O, BW / 2, 116, "Nintendo 3DS", YELLOW);
 	sub_text_centered(FONT_VCR8, BW / 2, 200, "Unofficial fan port", RGB(120, 110, 140));
+	if (!audio_ok()) {
+		sub_fill(0, 164, BW, 30, RGB(90, 10, 10));
+		sub_text_centered(FONT_VCR8O, BW / 2, 166, "NO SOUND: /3ds/dspfirm.cdc missing", WHITE);
+		sub_text_centered(FONT_VCR8, BW / 2, 180, "run DSP1 once to dump the DSP firmware", RGB(255, 200, 200));
+	}
 	sub_text_centered(FONT_VCR8, BW / 2, 216, "Touch or press START", RGB(170, 160, 200));
 }
 
