@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds FunkinDS.nds with the official devkitPro docker image.
+# Builds Funkin3DS.3dsx with the official devkitPro docker image.
 #   ./build.sh path/to/Funkin.assets    convert the assets, then build
 #   ./build.sh                          build only (assets already converted)
 set -e

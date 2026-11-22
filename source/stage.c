@@ -1,6 +1,7 @@
 // Stage: props from data/stages/*.json (converted to PropDef tables) drawn
 // together with the characters, sorted by zIndex, plus the behaviour of the
-// stage scripts (preload/scripts/stages/*.hxc) that matter on the DS.
+// stage scripts (preload/scripts/stages/*.hxc). Every layer gets a stereo
+// depth from its scroll factor, and its blend mode (add / multiply overlays).
 #include "play.h"
 
 typedef struct {
@@ -11,7 +12,7 @@ typedef struct {
 	int frame;
 	bool finished, hasDanced, visible;
 	float x, y, alpha;
-	u16 color;
+	u32 color;
 } Prop;
 
 #define MAX_PROPS 40
@@ -32,7 +33,7 @@ static bool trainMoving, trainFinishing, trainStarted;
 static float trainTime, trainFrame;
 static bool carCanDrive;
 static float carTime;
-static u16 lightColor;
+static u32 lightColor;
 
 static bool is_stage(const char *id) { return stage && !strcmp(stage->id, id); }
 
@@ -109,7 +110,7 @@ void stage_load(const StageDef *d) {
 		p->x = pd->x;
 		p->y = pd->y;
 		p->alpha = pd->alpha;
-		p->color = pd->kind == PROP_SOLID ? pd->color : pd->color;
+		p->color = pd->color;
 		p->visible = true;
 		p->anim = -1;
 		if (pd->sheet) {
@@ -117,7 +118,7 @@ void stage_load(const StageDef *d) {
 			for (k = 0; k < nSheets; k++) if (sheetDefs[k] == pd->sheet) break;
 			if (k == nSheets) {
 				sheetDefs[k] = pd->sheet;
-				sheet_load(&sheets[k], pd->sheet, true);
+				sheet_load(&sheets[k], pd->sheet);
 				nSheets++;
 			}
 			p->sh = &sheets[k];
@@ -277,21 +278,24 @@ void stage_update(float dt) {
 
 void stage_draw(const Cam *cam) {
 	if (!stage) return;
-	float k = cam->zoom * KDS;
+	float k = cam->zoom * KH;
 	for (int i = 0; i < nOrder; i++) {
 		int o = order[i];
 		if (o >= 1000) {
 			Character *c = P.chars[o - 1000];
-			if (o - 1000 == ROLE_GF && P.abot.loaded) chr_draw(&P.abot, cam);
-			if (c && c->loaded) chr_draw(c, cam);
+			gfx_blend(BLEND_NORMAL);
+			if (o - 1000 == ROLE_GF && P.abot.loaded) { gfx_depth(depth_of(P.abot.sfx)); chr_draw(&P.abot, cam); }
+			if (c && c->loaded) { gfx_depth(depth_of(c->sfx)); chr_draw(c, cam); }
 			continue;
 		}
 		Prop *p = &props[o];
 		const PropDef *d = p->def;
 		if (!p->visible || p->alpha <= 0.01f) continue;
+		gfx_depth(depth_of(d->sfx));
+		gfx_blend(d->blend);
 		float sx = cam_sx(cam, p->x, d->sfx), sy = cam_sy(cam, p->y, d->sfy);
 		if (d->kind == PROP_SOLID) {
-			gfx_rect(sx, sy, cam_sx(cam, p->x + d->w, d->sfx), cam_sy(cam, p->y + d->h, d->sfy), d->color, A31(p->alpha));
+			gfx_rect(sx, sy, cam_sx(cam, p->x + d->w, d->sfx), cam_sy(cam, p->y + d->h, d->sfy), d->color, AL(p->alpha));
 			continue;
 		}
 		if (!p->sh || !p->sh->loaded) continue;
@@ -303,6 +307,8 @@ void stage_draw(const Cam *cam) {
 			ox = a->offx;
 			oy = a->offy;
 		}
-		sheet_draw(p->sh, frame, cam_sx(cam, p->x + ox, d->sfx), cam_sy(cam, p->y + oy, d->sfy), k, p->color, A31(p->alpha));
+		sheet_draw(p->sh, frame, cam_sx(cam, p->x + ox, d->sfx), cam_sy(cam, p->y + oy, d->sfy), k, p->color, AL(p->alpha));
 	}
+	gfx_blend(BLEND_NORMAL);
+	gfx_depth(0);
 }

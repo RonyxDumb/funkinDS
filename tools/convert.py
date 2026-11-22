@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Friday Night Funkin' DS asset converter.
+"""Friday Night Funkin' 3DS asset converter.
 
 Usage:  python3 tools/convert.py <Funkin.assets checkout> [--no-audio] [--only=chars,stages,...]
 
 Reads the original game data (V-Slice JSON: characters, stages, levels,
 songs, note styles) and assets and writes:
-  nitrofiles/...          binary data loaded at runtime from NitroFS
-  maxmod_data/*.wav       short sound effects (maxmod soundbank)
+  romfs/...               binary data loaded at runtime from the RomFS
   source/gen_assets.c     generated metadata tables
   include/gen_assets.h
 
@@ -28,7 +27,7 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import *  # noqa
 import sheet as SH
-from sheet import Sheet, MSheet, outpath, cstr, cfloat, cid, scaled, trim, C_OUT, H_OUT, write_b16, emit_seq  # noqa
+from sheet import Sheet, MSheet, outpath, cstr, cfloat, cid, scaled, trim, C_OUT, H_OUT, emit_seq  # noqa
 from animate import Atlas, item_key
 
 ROOT = SH.ROOT
@@ -109,7 +108,7 @@ def parse_packer(txt, png):
 #                              mirrored inside the frame when flipX)
 # For Animate atlases the flixel frame is the whole-timeline bounds.
 # ===========================================================================
-CHAR_TS = 0.165        # texels per world unit (non pixel characters)
+CHAR_TS = 0.40         # texels per world unit (non pixel characters; the screen shows 0.3125 px per unit at zoom 1)
 DEAD_ANIMS = ('firstDeath', 'deathLoop', 'deathConfirm')
 SKIP_ANIM = re.compile(r'^(fakeoutDeath|combo\d+|drop\d+|.*-censor|.*-explosion|burp.*|intro\d|laughCutscene|shit|bfCatch)$')
 
@@ -296,8 +295,8 @@ def convert_character(cid_, player):
     return info
 
 
-def fit_ts(anims, scale, ts, max_area=128 * 160):
-    """Lower the texture scale so that the VRAM slot stays small."""
+def fit_ts(anims, scale, ts, max_side=1000, max_area=512 * 640):
+    """Lower the texture scale so that the texture slot stays reasonable."""
     mw = mh = 1
     for a in anims:
         for h in a['frames']:
@@ -305,12 +304,12 @@ def fit_ts(anims, scale, ts, max_area=128 * 160):
             if h[0] == 's':
                 c = crop_frame(h[1].img, h[2]).getchannel('A').getbbox() or (0, 0, 1, 1)
                 fw, fh = c[2] - c[0], c[3] - c[1]
-            else:
+            elif h[0] == 'a':
                 b = h[1].atlas.item_bounds(h[1].atlas.items(h[2], h[3]))
                 if b:
                     fw, fh = b[2] - b[0], b[3] - b[1]
             mw, mh = max(mw, fw * scale * ts), max(mh, fh * scale * ts)
-    k = max(min(1.0, cw / mw, ch / mh) for cw, ch in ((126, 126), (254, 126), (126, 254)))
+    k = min(1.0, max_side / mw, max_side / mh, math.sqrt(max_area / (mw * mh)))
     return ts * k
 
 
@@ -330,20 +329,23 @@ def write_chr(tag, anims, info, scale, ts, flip, pixel):
                 frames.append(r)
             ids.append(uniq[k])
         adefs.append((a, ids))
-    palimg, colors = build_palette([f[0] for f in frames], 255)
-    pal = pal_bytes(colors, 256)
+    pal = rgba_palette([f[0] for f in frames], 255)
     pix = bytearray()
     fdefs = []
     maxw = maxh = 8
     for im, dx, dy, ww, wh in frames:
-        w4 = (im.width + 3) & ~3
-        pad = Image.new('RGBA', (w4, im.height), (0, 0, 0, 0))
-        pad.paste(im, (0, 0))
-        idx = index_image(pad, palimg)
-        comp = lz10(idx)
-        fdefs.append((len(pix), len(comp), w4, im.height, im.width, 0, dx, dy, ww, wh))
+        # tiled size: one transparent texel at least on the right and bottom
+        # (bilinear filtering samples it)
+        w8 = (im.width + 1 + 7) & ~7
+        h8 = (im.height + 1 + 7) & ~7
+        idx = np.zeros((h8, w8), dtype=np.uint8)
+        idx[:im.height, :im.width] = index_rgba(im, pal)
+        comp = lz10(tile(idx).tobytes())
+        fdefs.append((len(pix), len(comp), w8, h8, im.width, im.height, dx, dy, ww, wh))
         pix += comp
-        maxw, maxh = max(maxw, w4), max(maxh, im.height)
+        while len(pix) % 4:
+            pix.append(0)
+        maxw, maxh = max(maxw, w8), max(maxh, h8)
     seq = []
     arecs = []
     for a, ids in adefs:
@@ -357,8 +359,8 @@ def write_chr(tag, anims, info, scale, ts, flip, pixel):
     off_seq = off_anims + ANIM.size * len(arecs)
     off_frames = (off_seq + 2 * len(seq) + 3) & ~3
     off_pal = off_frames + FRM.size * len(fdefs)
-    off_pix = off_pal + 512
-    out = bytearray(HDR.pack(b'CHR1', ts, log2size(maxw), log2size(maxh), 1 if pixel else 0, 1 if flip else 0,
+    off_pix = off_pal + 1024
+    out = bytearray(HDR.pack(b'CHR3', ts, log2size(maxw), log2size(maxh), 1 if pixel else 0, 1 if flip else 0,
                              info['W'], info['H'], info['gx'], info['gy'], info['camx'], info['camy'], info['sing'],
                              info['dance'], len(fdefs), len(arecs), off_anims, off_seq, off_frames, off_pal, off_pix))
     for n, fps, loop, nf, st, ox, oy in arecs:
@@ -369,7 +371,7 @@ def write_chr(tag, anims, info, scale, ts, flip, pixel):
         out.append(0)
     for f in fdefs:
         out += FRM.pack(*f)
-    out += pal
+    out += pal_bytes(pal, 256)
     out += pix
     with open(outpath('chr', tag + '.chr'), 'wb') as fo:
         fo.write(out)
@@ -380,8 +382,7 @@ def write_chr(tag, anims, info, scale, ts, flip, pixel):
 # ===========================================================================
 # Stages
 # ===========================================================================
-KDS = 192.0 / 720.0
-STAGE_BUDGET = 156 * 1024     # VRAM bytes for the stage props
+STAGE_BUDGET = 9 * 1024 * 1024     # texture bytes for the stage props
 STAGES = []
 
 
@@ -399,8 +400,14 @@ def color_hex(s, default=0xFFFFFF):
         return {'white': 0xFFFFFF, 'black': 0, 'red': 0xFF0000}.get(s.lower(), default)
 
 
-def rgb15c(c):
-    return rgb15((c >> 16) & 255, (c >> 8) & 255, c & 255)
+# blend modes set by the stage scripts (preload/scripts/stages/*.hxc)
+BLEND_NORMAL, BLEND_ADD, BLEND_MULTIPLY = 0, 1, 2
+BLEND_PROPS = {('mainStage', 'brightLightSmall'): BLEND_ADD, ('mainStage', 'orangeLight'): BLEND_ADD,
+               ('mainStage', 'lightgreen'): BLEND_ADD, ('mainStage', 'lightred'): BLEND_ADD,
+               ('mainStage', 'lightAbove'): BLEND_ADD, ('limoRide', 'shootingStar'): BLEND_ADD,
+               ('phillyBlazin', 'skyAdditive'): BLEND_ADD, ('phillyBlazin', 'foregroundMultiply'): BLEND_MULTIPLY,
+               ('phillyBlazin', 'additionalLighten'): BLEND_ADD, ('mallXmas', 'foregroundMultiply'): BLEND_MULTIPLY,
+               ('mallXmas', 'additionalLighten'): BLEND_ADD}
 
 
 def prop_frames(p, lib):
@@ -432,8 +439,7 @@ def prop_frames(p, lib):
 
 NOCROP = {('phillyTrain', 'train'), ('limoRide', 'fastCar')}
 PROP_SKIP = {('school', 'petals')}
-PROP_C16 = {('spookyMansion', 'halloweenBG'), ('school', 'freaks'), ('school', 'petals'), ('school', 'treesBG')}
-PROP_STRIDE = {('spookyMansion', 'halloweenBG'): 10, ('school', 'treesBG'): 19, ('school', 'freaks'): 3}
+PROP_STRIDE = {('spookyMansion', 'halloweenBG'): 4, ('school', 'treesBG'): 6}
 
 
 def crop_window(r, ts, w, px, py):
@@ -477,22 +483,22 @@ def convert_stage(sid):
             else:
                 fx.append(c['position'][0] + co[0])
                 fy.append(c['position'][1] - 300 + co[1])
-    mx_, my0, my1, zk = (120, 120, 120, 0.8) if bsid == 'school' else (160, 200, 160, 0.75)   # pixel stages: no VRAM to spare
+    mx_, my0, my1, zk = (160, 200, 160, 0.8)
     cx0, cx1 = min(fx) - mx_, max(fx) + mx_
     cy0, cy1 = min(fy) - my0, max(fy) + my1
-    zmin = zoom * zk             # zoom events (the DS shows the same 16:9 view)
+    zmin = zoom * zk             # zoom events
 
     def window(q):
         if (bsid, q['name']) in NOCROP:
             return (-1e9, -1e9, 1e9, 1e9)
         sfx, sfy = q['sfx'], q['sfy']
-        return ((cx0 - 640) * sfx + 640 - 640 / zmin, (cy0 - 360) * sfy + 360 - 360 / zmin,
-                (cx1 - 640) * sfx + 640 + 640 / zmin, (cy1 - 360) * sfy + 360 + 360 / zmin)
+        # the top screen shows 1280x768 units at zoom 1
+        return ((cx0 - 640) * sfx + 640 - 640 / zmin, (cy0 - 360) * sfy + 360 - 384 / zmin,
+                (cx1 - 640) * sfx + 640 + 640 / zmin, (cy1 - 360) * sfy + 360 + 384 / zmin)
     props = []
     for p in d['props']:
-        if (bsid, p['name']) in PROP_SKIP or p['name'].endswith('_lightmap') or \
-                p['name'] in ('foregroundMultiply', 'additionalLighten', 'fog'):
-            continue   # blend-mode overlays (add / multiply) the DS cannot draw
+        if (bsid, p['name']) in PROP_SKIP or p['name'] == 'fog':
+            continue
         sc = p.get('scale', [1, 1])
         if not isinstance(sc, list):
             sc = [sc, sc]
@@ -501,7 +507,10 @@ def convert_stage(sid):
                  sfx=float(scr[0]), sfy=float(scr[1]), z=int(p.get('zIndex', 0) or 0), alpha=float(p.get('alpha', 1)),
                  dance=float(p.get('danceEvery', 0) or 0), pixel=bool(p.get('isPixel', False)),
                  color=color_hex(p.get('color'), 0xFFFFFF), start=p.get('startingAnimation'),
-                 flip=bool(p.get('flipX', False)))
+                 flip=bool(p.get('flipX', False)), blend=BLEND_PROPS.get((bsid, p['name']), BLEND_NORMAL))
+        if p['name'].endswith('_lightmap'):
+            q['blend'] = BLEND_ADD
+            q['alpha'] = 0.6
         if p['assetPath'].startswith('#'):
             q['kind'] = 'solid'
             q['color'] = color_hex(p['assetPath'], 0)
@@ -528,13 +537,6 @@ def convert_stage(sid):
                 q['x'] -= (r.width - im0.width) / 2 * q['sx']
                 q['y'] -= (r.height - im0.height) / 2 * q['sy']
                 q['img'] = r
-        if (bsid, q['name']) in PROP_C16:
-            q['c16'] = True
-        elif q['pixel'] and q['kind'] != 'solid':
-            im0 = q['img'] if q['kind'] == 'static' else getattr(q['src'], 'img', None)
-            if im0 is not None:
-                cols = im0.getcolors(4096)
-                q['c16'] = cols is not None and len([c for c in cols if c[1][3] >= 100]) <= 15
         props.append(q)
     # texture scale: fit the VRAM budget
     def frame_list(q):
@@ -550,7 +552,7 @@ def convert_stage(sid):
             w = window(q)
             x0, y0 = max(w[0], q['x'] + bx * q['sx']), max(w[1], q['y'] + by * q['sy'])
             x1, y1 = min(w[2], q['x'] + (bx + t.width) * q['sx']), min(w[3], q['y'] + (by + t.height) * q['sy'])
-            return max(0, x1 - x0) * ts * max(0, y1 - y0) * ts * 1.15 * (0.5 if q.get('c16') else 1)
+            return max(0, x1 - x0) * ts * max(0, y1 - y0) * ts * 1.3 * 4
         if q['kind'] == 'anim':
             tot = 0
             w = window(q)
@@ -562,10 +564,10 @@ def convert_stage(sid):
                     fw, fh = b[2] - b[0], b[3] - b[1]
                 ww = min(fw * q['sx'], w[2] - w[0])
                 hh = min(fh * q['sy'], w[3] - w[1])
-                tot += ww * ts * hh * ts * 0.5 * (0.5 if q.get('c16') else 1)
+                tot += ww * ts * hh * ts * 0.5 * 4
             return tot
         return 0
-    qual = 0.85
+    qual = 1.25
     while True:
         tsd = {}
         tot = 0
@@ -575,7 +577,7 @@ def convert_stage(sid):
             if q['pixel']:
                 ts = 1.0 / q['sx']
             else:
-                ts = KDS * zoom * 0.75 * qual
+                ts = K * zoom * qual
             tsd[q['name']] = ts
             tot += est(q, ts)
         if tot <= STAGE_BUDGET or qual < 0.2:
@@ -616,7 +618,7 @@ def convert_stage(sid):
                 tw = max(1, int(round(t.width * q['sx'] * ts)))
                 th = max(1, int(round(t.height * q['sy'] * ts)))
                 im = t.resize((tw, th), Image.NEAREST if q['pixel'] else Image.LANCZOS)
-                sh = Sheet('st_' + nm, ts, fmt=FMT_16COL if q.get('c16') else FMT_256COL)
+                sh = Sheet('st_' + nm, ts, nearest=q['pixel'])
                 sh.add_tiled('main', im, 0, 0)
                 vram += sh.build().vram
                 sheetname = '&sheet_st_' + nm
@@ -627,7 +629,7 @@ def convert_stage(sid):
                 if key in shared:
                     sheetname, fidx = shared[key]
                 else:
-                    sh = Sheet('st_' + nm, ts, fmt=FMT_16COL if q.get('c16') else FMT_256COL)
+                    sh = Sheet('st_' + nm, ts, nearest=q['pixel'])
                     fidx = {}
                     for h in q['flist']:
                         r = render_frame(h, q['sx'], ts, q['flip'], q['pixel'])
@@ -653,11 +655,11 @@ def convert_stage(sid):
                     start = names.index(q['start'])
             if anims:
                 C_OUT.append('static const PropAnim st_%s_anims[] = {%s};' % (nm, ','.join(anims)))
-            cprops.append('{%s,%s,%d,%s,%s,%s,%s,%s,%s,0x%04X,%s,%d,%s,%d,%s,%d,%d}' % (
+            cprops.append('{%s,%s,%d,%s,%s,%s,%s,%s,%s,0x%06X,%s,%d,%s,%d,%s,%d,%d,%d}' % (
                 cstr(q['name']), sheetname, {'static': 0, 'anim': 1, 'solid': 2}[q['kind']], cfloat(q['x']), cfloat(q['y']),
-                cfloat(q['sfx']), cfloat(q['sfy']), cfloat(q.get('w', 0)), cfloat(q.get('h', 0)), rgb15c(q['color']),
+                cfloat(q['sfx']), cfloat(q['sfy']), cfloat(q.get('w', 0)), cfloat(q.get('h', 0)), q['color'],
                 cfloat(q['alpha']), q['z'], cfloat(q['dance']), len(anims), ('st_%s_anims' % nm) if anims else 'NULL', start,
-                1 if q['pixel'] else 0))
+                1 if q['pixel'] else 0, q.get('blend', 0)))
         return cprops, vram, c0, h0
 
     # measure / adjust: keep the best build that fits (texture packing makes
@@ -676,7 +678,7 @@ def convert_stage(sid):
         if fit and max(fit)[0] >= STAGE_BUDGET * 0.9:
             break
         k = math.sqrt(STAGE_BUDGET / vram) * (0.98 if vram > STAGE_BUDGET else 1.01)
-        nq = min(1.0, qual * k)
+        nq = min(1.25, qual * k)
         if fit:   # never go below the best fitting quality
             nq = max(nq, max(f[1] for f in fit) * 1.02) if vram <= STAGE_BUDGET * 1.03 else nq
         if abs(nq - qual) < 0.005:
@@ -955,8 +957,9 @@ def emit_songs(weeks, stage_ids):
 # ===========================================================================
 # Audio: songs are IMA ADPCM streams (tools/adpcm.c), sound effects are WAVs
 # ===========================================================================
-RATE = 22050
-RAW = ['-ac', '1', '-ar', str(RATE), '-f', 's16le', '-acodec', 'pcm_s16le']
+RATE = int(OPTS.get('--rate', 32000))
+# instrumentals / music in stereo, the player voices in mono (--mono: everything mono)
+STEREO = '--mono' not in OPTS
 
 
 def ff(srcs, dst, extra=(), filt=None):
@@ -968,10 +971,24 @@ def ff(srcs, dst, extra=(), filt=None):
     subprocess.run(cmd + list(extra) + [dst], check=True)
 
 
-def adpcm(srcs, dst, filt=None):
+def adpcm(srcs, dst, filt=None, stereo=True):
+    ch = 2 if stereo and STEREO else 1
     tmp = os.path.join(BUILD, 'tmp.raw')
-    ff(srcs, tmp, RAW, filt)
-    subprocess.run([ctool('adpcm'), tmp, outpath(dst)], check=True)
+    ff(srcs, tmp, ['-ac', str(ch), '-ar', str(RATE), '-f', 's16le', '-acodec', 'pcm_s16le'], filt)
+    subprocess.run([ctool('adpcm'), tmp, outpath(dst), str(RATE), str(ch)], check=True)
+
+
+SFX_LIST = [('scroll', 'preload/sounds/scrollMenu.ogg'), ('confirm', 'preload/sounds/confirmMenu.ogg'),
+            ('cancel', 'preload/sounds/cancelMenu.ogg'),
+            ('missnote1', 'shared/sounds/missnote1.ogg'), ('missnote2', 'shared/sounds/missnote2.ogg'),
+            ('missnote3', 'shared/sounds/missnote3.ogg')]
+for _cs in ('funkin', 'pixel'):
+    for _n in ('THREE', 'TWO', 'ONE', 'GO'):
+        SFX_LIST.append(('intro%s_%s' % (_n.lower(), _cs), 'shared/sounds/gameplay/countdown/%s/intro%s.ogg' % (_cs, _n)))
+SFX_LIST += [('loss', 'shared/sounds/gameplay/gameover/fnf_loss_sfx.ogg'),
+             ('loss_pixel', 'shared/sounds/gameplay/gameover/fnf_loss_sfx-pixel.ogg'),
+             ('thunder1', 'week2/sounds/thunder_1.ogg'), ('thunder2', 'week2/sounds/thunder_2.ogg'),
+             ('train', 'week3/sounds/train_passes.ogg'), ('carpass', 'week4/sounds/carPass0.ogg')]
 
 
 def convert_audio():
@@ -1006,7 +1023,7 @@ def convert_audio():
         else:
             adpcm([inst], dst)
         if vp:
-            adpcm([vp], 'snd/%s_voices.adp' % s['tag'])
+            adpcm([vp], 'snd/%s_voices.adp' % s['tag'], stereo=False)
         print('audio', s['tag'], os.path.basename(inst), vp and os.path.basename(vp), vo and os.path.basename(vo))
     P = os.path.join(A, 'preload', 'music')
     adpcm([os.path.join(P, 'freakyMenu', 'freakyMenu.ogg')], 'snd/menu.adp')
@@ -1020,35 +1037,28 @@ def convert_audio():
         p = os.path.join(A, src)
         if os.path.exists(p):
             adpcm([p], 'snd/%s.adp' % nm)
-    md = os.path.join(ROOT, 'maxmod_data')
-    os.makedirs(md, exist_ok=True)
-    for f in os.listdir(md):
-        os.remove(os.path.join(md, f))
-    SFX = [('scroll', 'preload/sounds/scrollMenu.ogg'), ('confirm', 'preload/sounds/confirmMenu.ogg'),
-           ('cancel', 'preload/sounds/cancelMenu.ogg'),
-           ('missnote1', 'shared/sounds/missnote1.ogg'), ('missnote2', 'shared/sounds/missnote2.ogg'),
-           ('missnote3', 'shared/sounds/missnote3.ogg')]
-    for cs in ('funkin', 'pixel'):
-        for n in ('THREE', 'TWO', 'ONE', 'GO'):
-            SFX.append(('intro%s_%s' % (n.lower(), cs), 'shared/sounds/gameplay/countdown/%s/intro%s.ogg' % (cs, n)))
-    SFX += [('loss', 'shared/sounds/gameplay/gameover/fnf_loss_sfx.ogg'),
-            ('loss_pixel', 'shared/sounds/gameplay/gameover/fnf_loss_sfx-pixel.ogg'),
-            ('thunder1', 'week2/sounds/thunder_1.ogg'), ('thunder2', 'week2/sounds/thunder_2.ogg'),
-            ('train', 'week3/sounds/train_passes.ogg'), ('carpass', 'week4/sounds/carPass0.ogg')]
+    SFX = SFX_LIST
     for nm, src in SFX:
         p = os.path.join(A, src)
         if not os.path.exists(p):
             print('  missing sound', src)
             continue
-        ff([p], os.path.join(md, nm + '.wav'), ['-ac', '1', '-ar', str(RATE), '-acodec', 'pcm_u8'])
+        ff([p], outpath('sfx', nm + '.wav'), ['-ac', '1', '-ar', str(RATE), '-acodec', 'pcm_s16le'])
+
+
+def emit_sfx():
+    H_OUT.append('enum { %s, SFX_COUNT };' % ', '.join('SFX_' + nm.upper() for nm, _ in SFX_LIST))
+    C_OUT.append('const char *const sfx_files[SFX_COUNT] = {%s};' % ','.join(cstr('/sfx/%s.wav' % nm) for nm, _ in SFX_LIST))
+    H_OUT.append('extern const char *const sfx_files[SFX_COUNT];')
 
 
 # ===========================================================================
 # HUD: note styles, splashes, rating popups, countdown, health icons
-# HUD sheets use 1 texel per DS pixel at hud zoom 1 (sheet scale = KDS
-# texels per HUD unit), pixel styles 1 texel per source pixel.
+# HUD sheets use HUD_Q texels per screen pixel at hud zoom 1 (sheet scale =
+# K * HUD_Q texels per HUD unit), pixel styles 1 texel per source pixel.
 # ===========================================================================
 DIRS = ['Left', 'Down', 'Up', 'Right']
+HUD_Q = 1.25
 
 
 def convert_noteskin(name):
@@ -1059,8 +1069,8 @@ def convert_noteskin(name):
         return parse_sparrow(resolve(st[key]['assetPath']) + '.xml', resolve(st[key]['assetPath']) + '.png')
     nsc = float(st['note'].get('scale', 0.7))
     ssc = float(st['noteStrumline'].get('scale', 0.7))
-    tex = (1.0 / nsc) if pixel else KDS          # texels per hud unit
-    sh = Sheet('note_' + name, tex)
+    tex = (1.0 / nsc) if pixel else K * HUD_Q    # texels per hud unit
+    sh = Sheet('note_' + name, tex, nearest=pixel)
 
     def add_centered(fname, im, f, sc):
         full = full_frame(im, f)
@@ -1076,8 +1086,6 @@ def convert_noteskin(name):
             sel = frames_by_prefix(frames, st['noteStrumline']['data'][dk + kind]['prefix'])
             if kind == 'Press':
                 sel = sel[:1]
-            elif kind == 'Confirm' and not pixel:
-                sel = sel[::2]
             ids = []
             seen = {}
             for f in sel:
@@ -1122,14 +1130,14 @@ def convert_noteskin(name):
     H_OUT.append('extern const NoteSkin noteskin_%s;' % name)
     # splashes
     sp = st.get('noteSplash')
-    ssh = Sheet('splash_' + name, tex * (0.75 if not pixel else 1), fmt=FMT_16COL)
+    ssh = Sheet('splash_' + name, tex * (0.8 if not pixel else 1), nearest=pixel)
     sim, sfr = parse_sparrow(resolve(sp['assetPath']) + '.xml', resolve(sp['assetPath']) + '.png')
     spsc = float(sp.get('scale', 1.0))
     seqs = []
     for i, dname in enumerate(DIRS):
         var = []
         for v in sp['data'][dname.lower() + 'Splashes'][:1]:
-            sel = frames_by_prefix(sfr, v['prefix'])[::2]
+            sel = frames_by_prefix(sfr, v['prefix'])
             first = len(ssh.items)
             for j, f in enumerate(sel):
                 full = full_frame(sim, f)
@@ -1151,8 +1159,8 @@ def convert_popups():
     frames are in world units through the sheet scale."""
     for style, pixel in (('funkin', False), ('pixel', True)):
         rs, ns = (0.65, 0.45) if not pixel else (6 * 0.7, 6 * 0.85)
-        ts = 0.2 if not pixel else 1.0 / ns
-        sh = Sheet('popup_' + style, ts, fmt=FMT_256COL)
+        ts = K * 1.2 if not pixel else 1.0 / ns
+        sh = Sheet('popup_' + style, ts, nearest=pixel)
         names = ['sick', 'good', 'bad', 'shit'] + ['num%d' % i for i in range(10)] + ['combo']
         sizes = []
         for n in names:
@@ -1170,8 +1178,8 @@ def convert_popups():
     # countdown (camHUD, centered)
     for style, pixel in (('funkin', False), ('pixel', True)):
         sc = 1.0 if not pixel else 6.0
-        ts = KDS * 0.5 if not pixel else 1.0 / 6
-        sh = Sheet('countdown_' + style, ts, fmt=FMT_16COL if not pixel else FMT_256COL)
+        ts = K if not pixel else 1.0 / 6
+        sh = Sheet('countdown_' + style, ts, nearest=pixel)
         for n in ('ready', 'set', 'go'):
             im = Image.open(os.path.join(A, 'shared', 'images', 'ui', 'countdown', style, n + '.png')).convert('RGBA')
             s2 = scaled(im, sc * ts, pixel)
@@ -1192,10 +1200,10 @@ def convert_icons():
         pixel = im.height <= 64
         n = 2 if im.width >= im.height * 2 else 1
         fw = im.width // n
-        sh = Sheet('icon_' + cid(icon).lower(), KDS)
+        sh = Sheet('icon_' + cid(icon).lower(), K * 1.3, nearest=pixel)
         for i in range(2):
             fr = im.crop((min(i, n - 1) * fw, 0, (min(i, n - 1) + 1) * fw, im.height))
-            k = 150.0 / fw * KDS
+            k = 150.0 / fw * K * 1.3
             sh.add_packed('f%d' % i, scaled(fr, k, pixel), 0, 0)
         sh.build()
     rows = ','.join('{%s,&sheet_icon_%s}' % (cstr(i), cid(i).lower()) for i in sorted(ICONS))
@@ -1204,7 +1212,7 @@ def convert_icons():
 
 
 # ===========================================================================
-# Menus (top screen, the 1280x720 view letterboxed in 256x144: MS px per unit)
+# Menus (top screen, the 1280x720 view in 400x225: MS px per unit)
 # ===========================================================================
 MS = SH.MS
 
@@ -1261,7 +1269,7 @@ def convert_menus(weeks):
     sh.build()
     # --- main menu -----------------------------------------------------------
     for nm in ('menuBG', 'menuDesat'):
-        s2 = MSheet(nm.lower())
+        s2 = MSheet(nm.lower(), q=1.4)
         im = Image.open(os.path.join(P, nm + '.png')).convert('RGBA')
         s2.image('bg', im, 1280.0 / im.width * 1.0, tiled=True, trimit=False)
         s2.build()
@@ -1344,7 +1352,7 @@ def convert_menus(weeks):
     H_OUT.append('extern const s16 alphabet_map[95][2];')
 
 
-MENU_TS = 0.2 * 0.85        # texels per menu unit (the 1280x720 view is 256 px wide)
+MENU_TS = K * 1.1          # texels per menu unit
 
 
 def convert_menu_atlas(name, path, anims):
@@ -1360,7 +1368,7 @@ def convert_menu_atlas(name, path, anims):
         out.append(dict(name=an, fps=24.0, loop=loop, offx=0, offy=0, frames=hs, src=src))
     b = src.bounds
     info = dict(W=b[2], H=b[3], gx=b[0], gy=b[1], camx=0, camy=0, sing=8.0, dance=0.0)
-    write_chr(name, out, info, 1.0, fit_ts(out, 1.0, MENU_TS, max_area=128 * 128), False, False)
+    write_chr(name, out, info, 1.0, fit_ts(out, 1.0, MENU_TS), False, False)
 
 
 def convert_abot():
@@ -1430,7 +1438,8 @@ def convert_freeplay_menus():
 
 
 # Weekend 1 video cutscenes (songs/darnell.hxc, 2hot.hxc, blazin.hxc): 8 bpp
-# frames + palette, LZ77 compressed (see source/video.c), audio as ADPCM
+# frames (GPU tile order) + RGB565 palette, LZ77 compressed (see
+# source/video.c), audio as ADPCM
 VIDEOS = [('darnellCutscene', 0), ('2hotCutscene', 1), ('blazinCutscene', 1)]   # (name, 0 start / 1 ending)
 VIDEO_SONG = {'darnellCutscene': 'darnell', '2hotCutscene': '2hot', 'blazinCutscene': 'blazin'}
 
@@ -1445,8 +1454,8 @@ def convert_videos():
         dst = outpath('vid', name + '.vid')
         if os.path.exists(dst) and '--redo-video' not in OPTS:
             continue
-        w, h, fps = 256, 192, 12
-        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', src, '-vf', 'fps=%d,scale=-2:192:flags=lanczos,crop=256:192' % fps,
+        w, h, fps = 400, 240, int(OPTS.get('--video-fps', 15))
+        raw = subprocess.run(['ffmpeg', '-v', 'error', '-i', src, '-vf', 'fps=%d,scale=-2:240:flags=lanczos,crop=400:240' % fps,
                               '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'], check=True, stdout=subprocess.PIPE).stdout
         fsize = w * h * 3
         n = len(raw) // fsize
@@ -1456,9 +1465,10 @@ def convert_videos():
             q = im.quantize(colors=256, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
             pal = q.getpalette()[:768]
             pal += [0] * (768 - len(pal))
-            pb = b''.join(struct.pack('<H', rgb15(pal[k * 3], pal[k * 3 + 1], pal[k * 3 + 2])) for k in range(256))
-            frames.append(pb + lz10(q.tobytes()))
-        hdr = b'VID1' + struct.pack('<HHHH', w, h, fps, n)
+            pb = b''.join(struct.pack('<H', rgb565(pal[k * 3], pal[k * 3 + 1], pal[k * 3 + 2])) for k in range(256))
+            idx = np.frombuffer(q.tobytes(), dtype=np.uint8).reshape(h, w)
+            frames.append(pb + lz10(tile(idx).tobytes()))
+        hdr = b'VID3' + struct.pack('<HHHH', w, h, fps, n)
         pos = len(hdr) + 4 * (n + 1)
         offs = []
         for fr in frames:
@@ -1505,7 +1515,7 @@ def convert_dialogue():
         if d.get('flipX'):
             full = full.transpose(Image.FLIP_LEFT_RIGHT)
         t, (bx, by) = trim(full)
-        sh = Sheet('dlg_%s_%s' % (kind, cid(name).lower()), 1.0 / sc)
+        sh = Sheet('dlg_%s_%s' % (kind, cid(name).lower()), 1.0 / sc, nearest=True)
         sh.add_packed('main', t, bx, by)
         sh.build()
         return '{&sheet_dlg_%s_%s,%s,%s,%s,%s}' % (kind, cid(name).lower(), cfloat(x0), cfloat(y0), cfloat(w), cfloat(h))
@@ -1537,41 +1547,42 @@ def convert_dialogue():
                                                        cstr(mus.lower()), len(lines), cid(c).lower()))
     C_OUT.append('const DialogueSprite dlg_speakers[] = {%s};' % ','.join(v[1] for v in sorted(spk.values())))
     C_OUT.append('const DialogueSprite dlg_boxes[] = {%s};' % ','.join(v[1] for v in sorted(box.values())))
-    C_OUT.append('const u16 dlg_box_color[] = {%s};' % ','.join('0x%04X' % rgb15c(v[2]) for v in sorted(box.values())))
+    C_OUT.append('const u32 dlg_box_color[] = {%s};' % ','.join('0x%06X' % v[2] for v in sorted(box.values())))
     C_OUT.append('const Conversation conversations[] = {%s};\nconst int conversation_count = %d;' % (','.join(rows), len(rows)))
     H_OUT.append("""typedef struct { const SheetDef *sheet; float x, y, w, h; } DialogueSprite;
 typedef struct { u8 speaker, box; const char *text; } DialogueLine;
 typedef struct { const char *song; u32 bg; const char *music; u8 n; const DialogueLine *lines; } Conversation;
 extern const DialogueSprite dlg_speakers[];
 extern const DialogueSprite dlg_boxes[];
-extern const u16 dlg_box_color[];
+extern const u32 dlg_box_color[];
 extern const Conversation conversations[];
 extern const int conversation_count;""")
 
 
 def convert_icon():
-    """ROM icon (32x32, 16 colors): the mobile app icon from a Funkin.art checkout
+    """Home Menu icon (48x48): the mobile app icon from a Funkin.art checkout
     (--art=path, default ../funkin-art), else Boyfriend's health icon."""
     art = OPTS.get('--art') or os.path.join(ROOT, '..', 'funkin-art')
     src = os.path.join(art, 'icons', 'bf-iOS-Default-1024x1024.png')
     if os.path.exists(src):
-        im = Image.open(src).convert('RGB')
-        # rounded corners like the app icon, on the yellow background
-        im = im.resize((32, 32), Image.LANCZOS)
+        im = Image.open(src).convert('RGBA').resize((48, 48), Image.LANCZOS)
+        # rounded corners like the app icon
+        mask = Image.new('L', (192, 192), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, 191, 191), 36, fill=255)
+        im.putalpha(mask.resize((48, 48), Image.LANCZOS))
     else:
         ic = Image.open(os.path.join(A, 'preload', 'images', 'icons', 'icon-bf.png')).convert('RGBA')
-        ic = ic.crop((0, 0, ic.height, ic.height)).resize((32, 32), Image.LANCZOS)
-        im = Image.new('RGB', (32, 32), (0xF9, 0xCF, 0x51))
-        im.paste(ic, (0, 0), ic)
-    q = im.quantize(colors=16, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
-    q.save(os.path.join(BUILD, 'icon.bmp'))
+        ic = ic.crop((0, 0, ic.height, ic.height)).resize((48, 48), Image.LANCZOS)
+        im = Image.new('RGBA', (48, 48), (0xF9, 0xCF, 0x51, 255))
+        im.alpha_composite(ic)
+    im.save(os.path.join(BUILD, 'icon.png'))
     print('icon from', 'Funkin.art' if os.path.exists(src) else 'icon-bf.png')
 
 
 def convert_title():
     """Title logo and dancing Girlfriend as streamed .chr sprites (only the
-    current frame is in VRAM, so they can be big)."""
-    ts = 0.26
+    current frame is in a texture, so they can be big)."""
+    ts = 0.42
     src = Src.get('sparrow', 'preload:logoBumpin')
     hs = src.anim_frames('logo bumpin', None)
     f0 = hs[0][2]
@@ -1589,8 +1600,8 @@ def convert_title():
 
 def convert_fonts_all():
     vcr = os.path.join(A, 'fonts', 'vcr.ttf')
-    SH.FONTS[:] = [('vcr8', vcr, 10, 0), ('vcr8o', vcr, 10, 1), ('vcr12', vcr, 13, 0), ('vcr12o', vcr, 13, 1),
-                   ('vcr16o', vcr, 18, 1)]
+    SH.FONTS[:] = [('vcr8', vcr, 12, 0), ('vcr8o', vcr, 12, 1), ('vcr12', vcr, 16, 0), ('vcr12o', vcr, 16, 1),
+                   ('vcr16o', vcr, 22, 2), ('vcr24o', vcr, 32, 2)]
     SH.convert_fonts()
 
 
@@ -1621,6 +1632,7 @@ def main():
     convert_icon()
     convert_title()
     convert_fonts_all()
+    emit_sfx()
     if '--no-audio' not in OPTS:
         convert_audio()
     H_OUT.append('#define AUDIO_RATE %d' % RATE)

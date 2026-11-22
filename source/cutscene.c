@@ -6,14 +6,13 @@ static bool vOk;
 
 void video_enter(void) {
 	char p[64];
-	snprintf(p, sizeof(p), "nitro:/vid/%s.vid", g_video);
-	vOk = video_open(p, false, false);
-	snprintf(p, sizeof(p), "nitro:/snd/%s.adp", g_video);
+	snprintf(p, sizeof(p), "romfs:/vid/%s.vid", g_video);
+	vOk = video_open(p, false);
+	snprintf(p, sizeof(p), "romfs:/snd/%s.adp", g_video);
 	if (vOk) audio_play_music(p, false, 1);
 	vT = 0;
 	sub_clear(RGB(0, 0, 0));
-	font_load(FONT_VCR8, false);
-	sub_text_centered(FONT_VCR8, 128, 176, "START: skip", RGB(150, 150, 150));
+	sub_text_centered(FONT_VCR12O, BW / 2, 200, "START: skip", RGB(150, 150, 150));
 	g_fade = 0;
 }
 
@@ -29,4 +28,4 @@ void video_update_state(float dt) {
 		state_switch(g_videoNext);
 }
 
-void video_draw(void) {}
+void video_draw(void) { video_draw_frame(0, 0, SW, SH, 255); }

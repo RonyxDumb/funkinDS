@@ -1,0 +1,39 @@
+; Funkin 3DS sprite shader
+;   v0 = (x, y, depth)   screen pixels, depth = stereo offset at full 3D
+;   v1 = (u, v)
+;   v2 = color (4 unsigned bytes, premultiplied)
+; eye.x = stereo factor of the eye being drawn (-1 .. 1, times the slider)
+
+.fvec projection[4]
+.fvec eye
+
+.constf consts(1.0, 0.0, 0.00392156862745098, 0.5)
+.alias ones consts.xxxx
+.alias zeros consts.yyyy
+.alias rgba consts.zzzz
+
+.out outpos position
+.out outtc0 texcoord0
+.out outclr color
+
+.alias inpos v0
+.alias intex v1
+.alias inclr v2
+
+.proc main
+	; r0 = (x + depth * eye, y, 0.5, 1)
+	mul r1, eye.xxxx, inpos.zzzz
+	add r0.x, inpos.xxxx, r1.xxxx
+	mov r0.y, inpos.yyyy
+	mov r0.z, consts.wwww
+	mov r0.w, ones
+
+	dp4 outpos.x, projection[0], r0
+	dp4 outpos.y, projection[1], r0
+	dp4 outpos.z, projection[2], r0
+	dp4 outpos.w, projection[3], r0
+
+	mov outtc0, intex
+	mul outclr, rgba, inclr
+	end
+.end

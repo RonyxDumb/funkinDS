@@ -1,6 +1,6 @@
-name: Build NDS
+name: Build 3DS
 
-# Builds FunkinDS.nds from the official game assets.
+# Builds Funkin3DS.3dsx from the official game assets.
 # The assets are not redistributable (see the Funkin.assets license): the ROM
 # is only uploaded as a workflow artifact, never published as a release.
 
@@ -41,12 +41,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            nitrofiles
-            maxmod_data
-            build_tools/icon.bmp
+            romfs
+            build_tools/icon.png
             source/gen_assets.c
             include/gen_assets.h
-          key: assets-${{ env.ASSETS_SHA }}-${{ hashFiles('tools/**') }}
+          key: assets3ds-${{ env.ASSETS_SHA }}-${{ hashFiles('tools/**') }}
 
       - name: Convert the assets
         if: steps.cache.outputs.cache-hit != 'true'
@@ -57,6 +56,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FunkinDS
-          path: FunkinDS.nds
+          name: Funkin3DS
+          path: Funkin3DS.3dsx
           compression-level: 0

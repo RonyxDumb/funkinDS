@@ -18,8 +18,8 @@ typedef struct {
 	int anim[4];            // 0 static, 1 press, 2 confirm
 	float animTime[4];
 	float cpuRelease[4];    // cpu: time the confirm animation ends
-	float cx[4];            // lane centers (DS px)
-	float scale;            // lane scale (1 = 30 DS px per lane)
+	float cx[4];            // lane centers (screen px)
+	float scale;            // lane scale (1 = V-Slice size)
 	bool holding[4];
 } Strum;
 
@@ -71,7 +71,7 @@ typedef struct {
 	bool hideOpp;
 	float pauseA;            // pause dim (fades in and out)
 	float flashA;            // camGame flash
-	u16 flashCol;
+	u32 flashCol;
 	float flashDur;
 	Character abot;         // Nene's speaker
 	// dialogue (week 6)
@@ -93,4 +93,4 @@ void stage_beat(int beat);
 void stage_step(int step);
 void stage_draw(const Cam *cam);
 void stage_prop_play(const char *prop, const char *anim, bool force);
-void play_flash(u16 color, float dur);   // FlxG.camera.flash on the game camera
+void play_flash(u32 color, float dur);   // FlxG.camera.flash on the game camera

@@ -7,20 +7,22 @@ typedef struct {
 	float shakeX, shakeY;  // DS px
 } Cam;
 
-// world -> DS screen (flixel camera, zoom around the screen center)
+// world -> top screen (flixel camera, zoom around the screen center)
 static inline float cam_sx(const Cam *c, float wx, float sf) {
-	return (wx - c->camX * sf + 640.0f * sf - 640.0f) * c->zoom * KDS + 128.0f + c->shakeX;
+	return (wx - c->camX * sf + 640.0f * sf - 640.0f) * c->zoom * KH + 200.0f + c->shakeX;
 }
 static inline float cam_sy(const Cam *c, float wy, float sf) {
-	return (wy - c->camY * sf + 360.0f * sf - 360.0f) * c->zoom * KDS + 96.0f + c->shakeY;
+	return (wy - c->camY * sf + 360.0f * sf - 360.0f) * c->zoom * KH + 120.0f + c->shakeY;
 }
+// stereo depth of a layer from its scroll factor (backgrounds behind the screen)
+static inline float depth_of(float sf) { return clampf((1.0f - sf) * 7.0f, -3.0f, 7.0f); }
 
 typedef struct {
-	u32 off, size;
-	u8 wlog, hlog;
+	C3D_Tex *tex;
+	int w, h;
 	const void *owner;
 	int frame;
-	u8 *buf;               // decompressed frame
+	u8 *buf;               // decompressed frame (tiled indices)
 	float offx, offy;      // animation offset of the uploaded frame
 } ChrSlot;
 
@@ -33,13 +35,13 @@ typedef struct {
 	const ChrAnimRec *anims;
 	const u16 *seq;
 	const ChrFrameRec *frames;
-	u32 palAddr, palParam;
+	const u32 *pal;         // 256 premultiplied colors in GPU texel order
 	ChrSlot *slot;
 	int role;
 	float x, y;             // sprite position (top-left of the hitbox)
 	float sfx, sfy;         // scroll factors
 	float alpha;
-	u16 color;
+	u32 color;
 	bool visible;
 	int anim;
 	float animTime;
@@ -55,7 +57,7 @@ typedef struct {
 
 void chr_slots_reset(void);
 void chr_frame_begin(void);    // per frame decompression budget
-ChrSlot *chr_slot_new(int wlog, int hlog);
+ChrSlot *chr_slot_new(int wlog, int hlog, bool nearest);
 bool chr_load(Character *c, const char *tag, int role);
 void chr_unload(Character *c);
 void chr_place(Character *c, const StageChar *sc);

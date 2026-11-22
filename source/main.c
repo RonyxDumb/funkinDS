@@ -1,8 +1,7 @@
-// Funkin DS - entry point, state machine, save data
+// Funkin 3DS - entry point, state machine, save data
 #include "engine.h"
 #include "character.h"
-#include <filesystem.h>
-#include <fat.h>
+#include <sys/stat.h>
 
 u32 kDown, kHeld, kUp;
 touchPosition touch;
@@ -23,17 +22,16 @@ static int profFrames;
 const char *g_video;
 int g_videoNext;
 bool g_cutsceneDone;
+int perf_drops, perf_frames;
 
 const Cutscene *cutscene_for(const char *song, bool ending) {
 	for (int i = 0; i < cutscene_count; i++)
 		if (!strcmp(cutscenes[i].song, song) && cutscenes[i].ending == ending) return &cutscenes[i];
 	return NULL;
 }
-int perf_drops, perf_frames;
 
 Save save;
 static int curState = -1, nextState = -1;
-static bool fatOk;
 
 static const StateDef states[ST_COUNT] = {
 	[ST_TITLE] = { title_enter, title_update, title_draw, title_leave },
@@ -54,15 +52,15 @@ const char *diff_name(int d) {
 }
 
 void *file_load(const char *path, u32 *size) {
-	char full[96];
-	snprintf(full, sizeof(full), "nitro:%s", path);
+	char full[128];
+	snprintf(full, sizeof(full), "romfs:%s", path);
 	FILE *f = fopen(full, "rb");
 	if (!f) return NULL;
 	fseek(f, 0, SEEK_END);
 	long n = ftell(f);
 	fseek(f, 0, SEEK_SET);
 	void *buf = malloc(n + 4);
-	if (buf) fread(buf, 1, n, f);
+	if (buf && fread(buf, 1, n, f) != (size_t)n) { free(buf); buf = NULL; }
 	fclose(f);
 	if (size) *size = n;
 	return buf;
@@ -71,8 +69,9 @@ void *file_load(const char *path, u32 *size) {
 // ---------------------------------------------------------------------------
 // save data (FlxSave "WwcdSave" + FunkinSave highscores + options)
 // ---------------------------------------------------------------------------
-#define SAVE_PATH "fat:/data/funkinds.sav"
-#define SAVE_MAGIC 0x324B4E46   // "FNK2"
+#define SAVE_DIR "sdmc:/3ds/funkin3ds"
+#define SAVE_PATH SAVE_DIR "/save.dat"
+#define SAVE_MAGIC 0x33334B46   // "FK33"
 
 static void save_defaults(void) {
 	memset(&save, 0, sizeof(save));
@@ -80,11 +79,11 @@ static void save_defaults(void) {
 	save.camZoom = true;
 	save.flashing = true;
 	save.lastDiff = 1;
+	save.depth3d = 100;
 }
 
 void save_load(void) {
 	save_defaults();
-	if (!fatOk) return;
 	FILE *f = fopen(SAVE_PATH, "rb");
 	if (!f) return;
 	u32 magic = 0, size = 0;
@@ -96,8 +95,8 @@ void save_load(void) {
 }
 
 void save_write(void) {
-	if (!fatOk) return;
-	mkdir("fat:/data", 0777);
+	mkdir("sdmc:/3ds", 0777);
+	mkdir(SAVE_DIR, 0777);
 	FILE *f = fopen(SAVE_PATH, "wb");
 	if (!f) return;
 	u32 magic = SAVE_MAGIC, size = sizeof(Save);
@@ -110,7 +109,7 @@ void save_write(void) {
 // CoolUtil.playMenuSong(fadeIn)
 void menu_music(bool fadeIn) {
 	if (audio_music_playing()) return;
-	audio_play_music("nitro:/snd/menu.adp", true, fadeIn ? 0 : 1);
+	audio_play_music("romfs:/snd/menu.adp", true, fadeIn ? 0 : 1);
 	if (fadeIn) audio_fade_music(0.7f, 4);
 }
 
@@ -146,31 +145,107 @@ static void do_switch(void) {
 	if (curState >= 0) states[curState].leave();
 	tween_clear();
 	video_close();
-	gfx_reset_vram();
-	font_unload_all();
+	sub_clear(0);
 	curState = nextState;
 	nextState = -1;
 	states[curState].enter();
 }
 
+#ifdef AUTOTEST
+// scripted key presses (seconds since boot) to check the screens in an emulator
+typedef struct { float t; u32 key; } Step;
+#if AUTOTEST == 2
+// story mode week 6 (dialogue, pixel stage), options, character select
+static const bool autoBot = true;
+static const Step script[] = {
+	{ 4, KEY_START }, { 6, KEY_A },
+	{ 8, KEY_DOWN }, { 8.3f, KEY_DOWN }, { 8.6f, KEY_DOWN }, { 8.9f, KEY_DOWN }, { 9.2f, KEY_DOWN }, { 9.5f, KEY_DOWN },
+	{ 12, KEY_A }, { 20, KEY_A }, { 22, KEY_A }, { 24, KEY_START },
+	{ 45, KEY_START }, { 46, KEY_DOWN }, { 46.5f, KEY_DOWN }, { 47, KEY_A },
+	{ 50, KEY_B }, { 53, KEY_DOWN }, { 53.5f, KEY_DOWN }, { 54, KEY_A },
+	{ 58, KEY_DOWN }, { 59, KEY_B }, { 62, KEY_UP }, { 63, KEY_A },
+	{ 66, KEY_SELECT }, { 69, KEY_RIGHT }, { 71, KEY_A }, { 76, KEY_B },
+};
+#elif AUTOTEST == 3
+// weekend 1: video cutscene, philly streets
+static const bool autoBot = true;
+static const Step script[] = {
+	{ 4, KEY_START }, { 6, KEY_A },
+	{ 8, KEY_UP }, { 12, KEY_A }, { 18, KEY_START },
+};
+#elif AUTOTEST == 4
+// tutorial to the end (results), then a song without botplay (game over)
+static const bool autoBot = true;
+static const Step script[] = {
+	{ 4, KEY_START }, { 6, KEY_DOWN }, { 7, KEY_A }, { 10, KEY_A },
+	{ 105, KEY_A }, { 110, KEY_DOWN }, { 111, KEY_A },
+	{ 150, KEY_A }, { 156, KEY_B },
+};
+#else
+// freeplay week 1 song, pause, story mode week 1
+static const bool autoBot = true;
+static const Step script[] = {
+	{ 4, KEY_START }, { 6, KEY_DOWN }, { 7, KEY_A },                 // title -> main menu -> freeplay
+	{ 10, KEY_DOWN }, { 11, KEY_DOWN }, { 12, KEY_A },               // a week 1 song
+	{ 40, KEY_START }, { 43, KEY_START },                            // pause / resume
+	{ 60, KEY_START }, { 61, KEY_DOWN }, { 62, KEY_DOWN }, { 63, KEY_A },   // exit to freeplay
+	{ 66, KEY_B }, { 68, KEY_UP }, { 69, KEY_UP }, { 70, KEY_DOWN }, { 71, KEY_A },   // story mode
+	{ 74, KEY_DOWN }, { 76, KEY_A },
+};
+#endif
+static void autotest_keys(void) {
+	static u32 t0;
+	static int next;
+	if (!t0) { t0 = time_ticks(); save.botplay = autoBot; }
+#if AUTOTEST == 4
+	if (curState == ST_RESULTS) save.botplay = false;
+#endif
+	float t = (time_ticks() - t0) / TICK_FREQ;
+	if (next < (int)(sizeof(script) / sizeof(script[0])) && t >= script[next].t) {
+		kDown |= script[next].key;
+		kHeld |= script[next].key;
+		next++;
+	}
+}
+#endif
+
 static void fatal(const char *msg) {
-	consoleDemoInit();
-	printf("\n\n  Funkin DS\n\n  %s\n", msg);
-	while (pmMainLoop()) swiWaitForVBlank();
+	consoleInit(GFX_BOTTOM, NULL);
+	printf("\n\n  Funkin 3DS\n\n  %s\n\n  START: exit\n", msg);
+	while (aptMainLoop()) {
+		hidScanInput();
+		if (hidKeysDown() & KEY_START) break;
+		gfxFlushBuffers();
+		gfxSwapBuffers();
+		gspWaitForVBlank();
+	}
+	gfxExit();
 	exit(0);
 }
 
-int main(int argc, char **argv) {
-	defaultExceptionHandler();
-	if (!nitroFSInit(NULL)) fatal("NitroFS init failed.\n  Run the .nds with a loader\n  that supports argv/NitroFS.");
-	fatOk = fatInitDefault();
-	srand(12345);
+// fades and flashes over each screen
+static void overlay(int screen, float fade) {
+	gfx_screen(screen);
+	float w = screen == SCREEN_TOP ? SW : BW;
+	float fa = clampf(fade, 0, 1);
+	fa = fa * fa * (3 - 2 * fa);
+	if (fa > 0.004f) gfx_rect(-16, 0, w + 16, SH, BLACK, AL(fa));
+	float fl = clampf(g_flash, 0, 1);
+	if (fl > 0.004f && fa < 0.5f) gfx_rect(-16, 0, w + 16, SH, WHITE, AL(fl * 0.85f));
+}
 
+int main(int argc, char **argv) {
+	osSetSpeedupEnable(true);    // New 3DS: 804 MHz + L2 cache
 	gfx_init();
-	video_init();
+	Result rc = romfsInit();
+	if (R_FAILED(rc)) fatal("RomFS init failed.");
+	FILE *test = fopen("romfs:/font/vcr8.bin", "rb");
+	if (!test) fatal("Game data not found in RomFS.\n  Convert the assets before building\n  (see README.md).");
+	fclose(test);
+	srand(12345);
+	save_load();
 	sub_init();
 	audio_init();
-	save_load();
 #ifdef TEST_BOTPLAY
 	save.botplay = true;
 #endif
@@ -184,7 +259,7 @@ int main(int argc, char **argv) {
 #endif
 	u32 lastTicks = time_ticks();
 
-	while (pmMainLoop()) {
+	while (aptMainLoop()) {
 		if (nextState >= 0 && trans != 1) {
 			if (curState < 0) {
 				do_switch();
@@ -193,15 +268,19 @@ int main(int argc, char **argv) {
 				lastTicks = time_ticks();
 			} else trans = 1;
 		}
-		scanKeys();
-		kDown = keysDown();
-		kHeld = keysHeld();
-		kUp = keysUp();
+		hidScanInput();
+		kDown = hidKeysDown();
+		kHeld = hidKeysHeld();
+		kUp = hidKeysUp();
+#ifdef AUTOTEST
+		autotest_keys();
+#endif
 		touchDown = (kHeld & KEY_TOUCH) != 0;
-		if (touchDown) touchRead(&touch);
+		if (touchDown) hidTouchRead(&touch);
+		if ((kHeld & (KEY_START | KEY_SELECT | KEY_L | KEY_R)) == (KEY_START | KEY_SELECT | KEY_L | KEY_R)) break;   // quit
 
 		u32 now = time_ticks();
-		float dt = (now - lastTicks) / (float)TICK_FREQ;
+		float dt = (now - lastTicks) / TICK_FREQ;
 		lastTicks = now;
 		if (curState == ST_PLAY) { perf_frames++; if (dt > 1.5f / 59.83f) perf_drops += (int)(dt * 59.83f + 0.5f) - 1; }
 		if (dt > 0.1f) dt = 0.1f;
@@ -236,32 +315,27 @@ int main(int argc, char **argv) {
 
 		u32 t1 = time_ticks();
 		gfx_frame_begin();
+		prof_add(PF_GPU, t1);
+		t1 = time_ticks();
 		chr_frame_begin();
+		gfx_screen(SCREEN_TOP);
 		states[curState].draw();
+		overlay(SCREEN_TOP, g_fade);
+		u32 t2 = time_ticks();
+		sub_render();
+		overlay(SCREEN_BOTTOM, g_fade > g_subFade ? g_fade : g_subFade);
+		prof_add(PF_SUB, t2);
 		gfx_frame_end();
 		prof_add(PF_DRAW, t1);
 		prof_add(PF_FRAME, now);
-
-		swiWaitForVBlank();
-		t1 = time_ticks();
-		gfx_vblank();
-		video_vblank();
-		prof_add(PF_VBLANK, t1);
-		t1 = time_ticks();
-		sub_present();
-		prof_add(PF_SUB, t1);
 		if (++profFrames >= 60) { memcpy(prof_show, prof_max, sizeof(prof_max)); memset(prof_max, 0, sizeof(prof_max)); profFrames = 0; }
-		// master brightness: smoothstep fades to black, white flashes
-		float fa = clampf(g_fade, 0, 1), fs = clampf(g_fade > g_subFade ? g_fade : g_subFade, 0, 1);
-		fa = fa * fa * (3 - 2 * fa);
-		fs = fs * fs * (3 - 2 * fs);
-		int b = (int)(fa * 16 + 0.5f), bs = (int)(fs * 16 + 0.5f);
-		int w = (int)(clampf(g_flash, 0, 1) * 16 + 0.5f);
-		REG_MASTER_BRIGHT = b ? ((2 << 14) | b) : w ? ((1 << 14) | w) : 0;
-		REG_MASTER_BRIGHT_SUB = bs ? ((2 << 14) | bs) : w ? ((1 << 14) | w) : 0;
 		t1 = time_ticks();
 		audio_update();
 		prof_add(PF_AUDIO, t1);
 	}
+	if (curState >= 0) states[curState].leave();
+	audio_exit();
+	romfsExit();
+	gfx_exit();
 	return 0;
 }

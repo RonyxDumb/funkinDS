@@ -1,215 +1,189 @@
-// Bottom screen: 16bpp bitmap drawn in software
+// Bottom screen: a retained display list. The menus draw into it only when
+// something changes (like the DS version drew into a bitmap); the GPU replays
+// it every frame. An opaque fill removes the items it covers, so the list
+// stays small when fields are redrawn over and over.
 #include "engine.h"
-#pragma GCC target("arm")
 
-static u16 *fb;      // RAM back buffer
-static u16 *vfb;     // VRAM
-static volatile bool subDirtyFlag;
-static int dirtyY0 = 0, dirtyY1 = 192;     // rows to copy to VRAM
+enum { SI_FILL, SI_GRAD, SI_TEXT, SI_SPRITE, SI_BUTTON };
+typedef struct {
+	u8 kind, font;
+	s16 x, y, w, h;
+	u32 c0, c1;
+	u8 alpha;
+	u16 text;               // offset in the text pool
+	Sheet *sheet;
+	int frame;
+	float scale;
+	bool flip;
+} SubItem;
 
-static inline void mark_rows(int y0, int y1) {
-	if (y0 < 0) y0 = 0;
-	if (y1 > 192) y1 = 192;
-	if (y0 >= y1) return;
-	if (!subDirtyFlag) { dirtyY0 = y0; dirtyY1 = y1; }
-	else { if (y0 < dirtyY0) dirtyY0 = y0; if (y1 > dirtyY1) dirtyY1 = y1; }
-	subDirtyFlag = true;
+#define MAX_ITEMS 400
+#define POOL 12288
+static SubItem items[MAX_ITEMS];
+static int nItems;
+static char pool[POOL];
+static int poolUsed;
+static u32 bgColor;
+static SubHook hook;
+
+void sub_init(void) { sub_clear(0); }
+void sub_present(void) {}
+void sub_set_hook(SubHook h) { hook = h; }
+
+void sub_clear(u32 color) {
+	nItems = 0;
+	poolUsed = 0;
+	bgColor = color;
+	hook = NULL;
 }
 
-void sub_init(void) {
-	videoSetModeSub(MODE_5_2D);
-	int bg = bgInitSub(3, BgType_Bmp16, BgSize_B16_256x256, 0, 0);
-	vfb = bgGetGfxPtr(bg);
-	fb = malloc(256 * 192 * 2);
-	sub_clear(0x8000);
-}
-
-u16 *sub_fb(void) { return fb; }
-
-void sub_clear(u16 color) {
-	u32 c = (color | 0x8000) | ((u32)(color | 0x8000) << 16);
-	u32 *p = (u32 *)fb;
-	for (int i = 0; i < 256 * 192 / 2; i++) p[i] = c;
-	mark_rows(0, 192);
-}
-
-// only the rows that changed are copied (a full copy takes ~2.5 ms)
-void sub_present(void) {
-	if (!subDirtyFlag) return;
-	int n = (dirtyY1 - dirtyY0) * 512;
-	DC_FlushRange(fb + dirtyY0 * 256, n);
-	dmaCopyWords(3, fb + dirtyY0 * 256, vfb + dirtyY0 * 256, n);
-	subDirtyFlag = false;
-}
-
-void sub_mark(void) { mark_rows(0, 192); }
-
-void sub_fill(int x, int y, int w, int h, u16 color) {
-	mark_rows(y, y + h);
-	if (x < 0) { w += x; x = 0; }
-	if (y < 0) { h += y; y = 0; }
-	if (x + w > 256) w = 256 - x;
-	if (y + h > 192) h = 192 - y;
-	color |= 0x8000;
-	for (int j = 0; j < h; j++) {
-		u16 *p = fb + (y + j) * 256 + x;
-		for (int i = 0; i < w; i++) p[i] = color;
+// drop the items fully inside an opaque rectangle
+static void cover(int x, int y, int w, int h) {
+	int o = 0;
+	for (int i = 0; i < nItems; i++) {
+		SubItem *it = &items[i];
+		bool inside = it->x >= x && it->y >= y && it->x + it->w <= x + w && it->y + it->h <= y + h;
+		if (!inside) items[o++] = *it;
 	}
+	nItems = o;
+	if (!nItems) poolUsed = 0;
+	if (x <= 0 && y <= 0 && x + w >= BW && y + h >= BH) poolUsed = 0;
 }
 
-static inline u16 blend15(u16 d, u16 s, int a) {
-	a += a >> 4;                 // 0..31 -> 0..32
-	int r = ((s & 31) * a + (d & 31) * (32 - a)) >> 5;
-	int g = (((s >> 5) & 31) * a + ((d >> 5) & 31) * (32 - a)) >> 5;
-	int b = (((s >> 10) & 31) * a + ((d >> 10) & 31) * (32 - a)) >> 5;
-	return r | (g << 5) | (b << 10) | 0x8000;
-}
-
-void sub_fill_blend(int x, int y, int w, int h, u16 color, int a) {
-	mark_rows(0, 192);
-	if (x < 0) { w += x; x = 0; }
-	if (y < 0) { h += y; y = 0; }
-	if (x + w > 256) w = 256 - x;
-	if (y + h > 192) h = 192 - y;
-	for (int j = 0; j < h; j++) {
-		u16 *p = fb + (y + j) * 256 + x;
-		for (int i = 0; i < w; i++) p[i] = blend15(p[i], color, a);
+static SubItem *add(int kind, int x, int y, int w, int h) {
+	if (nItems >= MAX_ITEMS) {
+		// full: keep the newest half (old items are most likely covered)
+		memmove(items, items + MAX_ITEMS / 2, sizeof(SubItem) * (MAX_ITEMS - MAX_ITEMS / 2));
+		nItems = MAX_ITEMS - MAX_ITEMS / 2;
 	}
+	SubItem *it = &items[nItems++];
+	memset(it, 0, sizeof(*it));
+	it->kind = kind;
+	it->x = x; it->y = y; it->w = w; it->h = h;
+	it->alpha = 255;
+	return it;
 }
 
-bool img_load(Img16 *img, const char *path) {
-	u32 size;
-	u8 *b = file_load(path, &size);
-	if (!b) { img->px = NULL; img->w = img->h = 0; return false; }
-	img->w = b[0] | (b[1] << 8);
-	img->h = b[2] | (b[3] << 8);
-	img->px = malloc(img->w * img->h * 2);
-	memcpy(img->px, b + 4, img->w * img->h * 2);
-	free(b);
-	return true;
+void sub_fill(int x, int y, int w, int h, u32 color) {
+	if (w <= 0 || h <= 0) return;
+	if (x <= 0 && y <= 0 && x + w >= BW && y + h >= BH) { sub_clear(color); return; }
+	cover(x, y, w, h);
+	add(SI_FILL, x, y, w, h)->c0 = color;
 }
 
-void img_free(Img16 *img) {
-	if (img->px) free(img->px);
-	img->px = NULL;
+void sub_fill_blend(int x, int y, int w, int h, u32 color, int a) {
+	if (w <= 0 || h <= 0 || a <= 0) return;
+	if (a >= 255) { sub_fill(x, y, w, h, color); return; }
+	SubItem *it = add(SI_FILL, x, y, w, h);
+	it->c0 = color;
+	it->alpha = a;
 }
 
-void sub_blit(const Img16 *img, int x, int y) {
-	mark_rows(0, 192);
-	if (!img->px) return;
-	for (int j = 0; j < img->h; j++) {
-		int yy = y + j;
-		if (yy < 0 || yy >= 192) continue;
-		const u16 *s = img->px + j * img->w;
-		u16 *d = fb + yy * 256;
-		for (int i = 0; i < img->w; i++) {
-			int xx = x + i;
-			if (xx < 0 || xx >= 256) continue;
-			if (s[i] & 0x8000) d[xx] = s[i];
-		}
-	}
+void sub_gradient(int x, int y, int w, int h, u32 top, u32 bottom) {
+	if (w <= 0 || h <= 0) return;
+	cover(x, y, w, h);
+	SubItem *it = add(SI_GRAD, x, y, w, h);
+	it->c0 = top;
+	it->c1 = bottom;
 }
 
-void sub_blit_alpha(const Img16 *img, int x, int y, int a) {
-	mark_rows(0, 192);
-	if (!img->px || a <= 0) return;
-	if (a > 31) a = 31;
-	for (int j = 0; j < img->h; j++) {
-		int yy = y + j;
-		if (yy < 0 || yy >= 192) continue;
-		const u16 *s = img->px + j * img->w;
-		u16 *d = fb + yy * 256;
-		for (int i = 0; i < img->w; i++) {
-			int xx = x + i;
-			if (xx < 0 || xx >= 256) continue;
-			if (s[i] & 0x8000) d[xx] = blend15(d[xx], s[i], a);
-		}
-	}
-}
-
-void sub_rect(int x, int y, int w, int h, u16 color) {
+void sub_rect(int x, int y, int w, int h, u32 color) {
 	sub_fill(x, y, w, 1, color);
 	sub_fill(x, y + h - 1, w, 1, color);
 	sub_fill(x, y, 1, h, color);
 	sub_fill(x + w - 1, y, 1, h, color);
 }
 
-void sub_blit_flip(const Img16 *img, int x, int y) {
-	mark_rows(0, 192);
-	if (!img->px) return;
-	for (int j = 0; j < img->h; j++) {
-		int yy = y + j;
-		if (yy < 0 || yy >= 192) continue;
-		const u16 *s = img->px + j * img->w;
-		u16 *d = fb + yy * 256;
-		for (int i = 0; i < img->w; i++) {
-			int xx = x + img->w - 1 - i;
-			if (xx < 0 || xx >= 256) continue;
-			if (s[i] & 0x8000) d[xx] = s[i];
-		}
-	}
+void sub_button(int x, int y, int w, int h, bool sel) {
+	cover(x, y, w, h);
+	SubItem *it = add(SI_BUTTON, x, y, w, h);
+	it->c0 = sel ? 1 : 0;
 }
 
-// multiplies the image by a tint color, only the first clipw columns
-void sub_blit_tint(const Img16 *img, int x, int y, int clipw, u16 tint) {
-	mark_rows(0, 192);
-	if (!img->px) return;
-	int tr = (tint & 31) + 1, tg = ((tint >> 5) & 31) + 1, tb = ((tint >> 10) & 31) + 1;
-	if (clipw > img->w) clipw = img->w;
-	for (int j = 0; j < img->h; j++) {
-		int yy = y + j;
-		if (yy < 0 || yy >= 192) continue;
-		const u16 *s = img->px + j * img->w;
-		u16 *d = fb + yy * 256;
-		for (int i = 0; i < clipw; i++) {
-			int xx = x + i;
-			if (xx < 0 || xx >= 256) continue;
-			u16 c = s[i];
-			if (!(c & 0x8000)) continue;
-			int r = ((c & 31) * tr) >> 5, g = (((c >> 5) & 31) * tg) >> 5, b = (((c >> 10) & 31) * tb) >> 5;
-			d[xx] = r | (g << 5) | (b << 10) | 0x8000;
+void sub_text(int font, int x, int y, const char *s, u32 color) {
+	int len = strlen(s);
+	if (!len) return;
+	if (poolUsed + len + 1 > POOL) {
+		// compact the pool
+		static char np[POOL];
+		int used = 0;
+		for (int i = 0; i < nItems; i++) {
+			if (items[i].kind != SI_TEXT) continue;
+			const char *t = pool + items[i].text;
+			int l = strlen(t) + 1;
+			memcpy(np + used, t, l);
+			items[i].text = used;
+			used += l;
 		}
+		memcpy(pool, np, used);
+		poolUsed = used;
+		if (poolUsed + len + 1 > POOL) return;
 	}
+	font_load(font);
+	SubItem *it = add(SI_TEXT, x, y, font_width(font, s), font_height(font));
+	it->font = font;
+	it->c0 = color;
+	it->text = poolUsed;
+	memcpy(pool + poolUsed, s, len + 1);
+	poolUsed += len + 1;
 }
 
-void sub_text(int fid, int x, int y, const char *s, u16 color) {
-	Font *f = font_get(fid);
-	if (!f->alpha) font_load(fid, false);
-	if (!f->alpha) return;
-	const FontDef *d = font_defs[fid];
-	mark_rows(y - 4, y + d->lineh + 6);
-	int aw = 8 << d->wlog;
-	// glyph texel (A3I5: 3 bit alpha, 5 bit luminance) -> color, per call
-	static u16 lum[32];
-	static const u8 alphaOf[8] = { 0, 4, 9, 13, 18, 22, 27, 31 };
-	for (int l = 0; l < 32; l++) {
-		int k = l + 1;
-		lum[l] = (((color & 31) * k) >> 5) | (((((color >> 5) & 31) * k) >> 5) << 5) | (((((color >> 10) & 31) * k) >> 5) << 10);
-	}
-	for (; *s; s++) {
-		int c = (u8)*s;
-		if (c < 32 || c > 126) c = '?';
-		const Glyph *g = &d->glyphs[c - 32];
-		int x0 = x + g->ox;
-		for (int j = 0; j < g->h; j++) {
-			int yy = y + g->oy + j;
-			if (yy < 0 || yy >= 192) continue;
-			const u8 *a = f->alpha + (g->y + j) * aw + g->x;
-			u16 *p = fb + yy * 256;
-			for (int i = 0; i < g->w; i++) {
-				int v = a[i];
-				if (!v) continue;
-				int xx = x0 + i;
-				if ((unsigned)xx >= 256) continue;
-				int al = alphaOf[v >> 5];
-				u16 sc = lum[v & 31];
-				p[xx] = al >= 31 ? (sc | 0x8000) : blend15(p[xx], sc, al);
+void sub_text_centered(int font, int cx, int y, const char *s, u32 color) {
+	sub_text(font, cx - font_width(font, s) / 2, y, s, color);
+}
+
+void sub_text_right(int font, int rx, int y, const char *s, u32 color) {
+	sub_text(font, rx - font_width(font, s), y, s, color);
+}
+
+void sub_sprite(Sheet *sh, int frame, float x, float y, float scale, bool flip) {
+	if (!sh || !sh->loaded) return;
+	float x0, y0, x1, y1;
+	sheet_frame_bounds(sh, frame, &x0, &y0, &x1, &y1);
+	SubItem *it = add(SI_SPRITE, (int)(x + x0 * scale), (int)(y + y0 * scale), (int)((x1 - x0) * scale), (int)((y1 - y0) * scale));
+	it->sheet = sh;
+	it->frame = frame;
+	it->scale = scale;
+	it->flip = flip;
+	it->c0 = (u32)(int)x;   // origin
+	it->c1 = (u32)(int)y;
+}
+
+static void draw_button(const SubItem *it) {
+	bool sel = it->c0;
+	float x0 = it->x, y0 = it->y, x1 = it->x + it->w, y1 = it->y + it->h;
+	u32 top = sel ? RGB(0xFF, 0xE2, 0x7A) : RGB(0x5A, 0x3E, 0x92);
+	u32 bot = sel ? RGB(0xF2, 0xB8, 0x2E) : RGB(0x38, 0x24, 0x62);
+	u32 edge = sel ? RGB(0xFF, 0xFF, 0xFF) : RGB(0x1A, 0x10, 0x30);
+	// rounded corners (2 px)
+	gfx_rect(x0 + 2, y0, x1 - 2, y1, edge, 255);
+	gfx_rect(x0, y0 + 2, x1, y1 - 2, edge, 255);
+	gfx_rect(x0 + 1, y0 + 1, x1 - 1, y1 - 1, edge, 255);
+	gfx_gradient(x0 + 2, y0 + 2, x1 - 2, y1 - 2, top, bot, 255);
+	gfx_rect(x0 + 2, y0 + 2, x1 - 2, y0 + 3, WHITE, sel ? 140 : 40);
+}
+
+void sub_render(void) {
+	gfx_screen(SCREEN_BOTTOM);
+	gfx_rect(0, 0, BW, BH, bgColor, 255);
+	for (int i = 0; i < nItems; i++) {
+		const SubItem *it = &items[i];
+		switch (it->kind) {
+		case SI_FILL: gfx_rect(it->x, it->y, it->x + it->w, it->y + it->h, it->c0, it->alpha); break;
+		case SI_GRAD: gfx_gradient(it->x, it->y, it->x + it->w, it->y + it->h, it->c0, it->c1, 255); break;
+		case SI_BUTTON: draw_button(it); break;
+		case SI_TEXT: font_draw(it->font, it->x, it->y, pool + it->text, it->c0, 255); break;
+		case SI_SPRITE:
+			if (it->sheet->loaded) {
+				float x = (int)it->c0, y = (int)it->c1;
+				if (it->flip) {
+					float a, b, c, d;
+					sheet_frame_bounds(it->sheet, it->frame, &a, &b, &c, &d);
+					sheet_draw_flip(it->sheet, it->frame, x + (a + c) * it->scale, y, it->scale, it->scale, 1, WHITE, 255);
+				} else sheet_draw(it->sheet, it->frame, x, y, it->scale, WHITE, 255);
 			}
+			break;
 		}
-		x += g->adv;
 	}
-}
-
-void sub_text_centered(int fid, int cx, int y, const char *s, u16 color) {
-	sub_text(fid, cx - font_width(fid, s) / 2, y, s, color);
+	if (hook) hook();
 }

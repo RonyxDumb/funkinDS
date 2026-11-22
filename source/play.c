@@ -1,13 +1,13 @@
 // PlayState: a port of Friday Night Funkin' (V-Slice) PlayState / Strumline /
-// Conductor / scoring behaviour, laid out for the DS top screen.
+// Conductor / scoring behaviour. The top screen shows the whole V-Slice
+// layout (1280x720 view in 400x225, the game camera fills the 400x240 screen).
 #include "play.h"
 
 PlayState P;
 
 #define HIT_WINDOW 160.0f          // Constants.HIT_WINDOW_MS / PBOT1_MISS_THRESHOLD
-#define LANE_W 30.0f
-#define DS_VIEW 0.75f             // the whole 16:9 view in 256x144 (letterboxed)               // DS px between player lanes
-static const u32 laneKeys[4] = { KEY_LEFT | KEY_Y, KEY_DOWN | KEY_B, KEY_UP | KEY_X, KEY_RIGHT | KEY_A };
+#define NOTE_SPACING 112.0f       // Strumline.NOTE_SPACING (hud units between lanes)
+static const u32 laneKeys[4] = { KEY_LEFT | KEY_Y | KEY_ZL, KEY_DOWN | KEY_B, KEY_UP | KEY_X, KEY_RIGHT | KEY_A | KEY_ZR };
 static bool subDirty;
 static bool subStatic;     // bottom screen static part drawn
 static int pauseSel;
@@ -48,19 +48,16 @@ static void strum_setup(Strum *s, const ChartNote *src, int n, bool cpu) {
 		d->kind = src[i].kind;
 	}
 	s->n = n;
-	if (cpu) {
-		s->scale = 0.7f;
-		for (int i = 0; i < 4; i++) s->cx[i] = 14 + i * LANE_W * 0.7f;
-	} else {
-		s->scale = 1;
-		for (int i = 0; i < 4; i++) s->cx[i] = 256 - 15 - (3 - i) * LANE_W;
-	}
+	s->scale = 1;
+	// PlayState: opponent strumline at x = STRUMLINE_X_OFFSET (48), the player
+	// one at FlxG.width / 2 + 48; arrow centers 25 units right of the lane origin
+	float x0 = cpu ? 48 : 640 + 48;
+	for (int i = 0; i < 4; i++) s->cx[i] = hx(x0 + 25 + i * NOTE_SPACING);
 }
 
 static float strum_y(void) {
 	// strumline y = 24 (STRUMLINE_Y_OFFSET), center = y + 52 (hud units)
-	float y = (24 + 52 - 360) * KDS + 96;
-	return save.downscroll ? 192 - y : y;
+	return save.downscroll ? hy(720 - 24 - 52) : hy(24 + 52);
 }
 
 static Character *sl_char(int idx) { return idx == 0 ? P.chars[ROLE_BF] : P.chars[ROLE_DAD]; }
@@ -345,17 +342,19 @@ static void run_event(const ChartEvent *e) {
 static int dialogueSong = -1;
 
 static void sub_header_dialogue(void) {
-	sub_clear(RGB(20, 12, 40));
-	sub_text_centered(FONT_VCR16O, 128, 40, P.info->name, WHITE);
-	sub_text_centered(FONT_VCR12O, 128, 100, "A: next", RGB(0xF9, 0xCF, 0x51));
-	sub_text_centered(FONT_VCR12O, 128, 120, "START: skip", RGB(0xF9, 0xCF, 0x51));
+	sub_gradient(0, 0, BW, BH, RGB(40, 24, 72), RGB(12, 8, 24));
+	sub_text_centered(FONT_VCR16O, BW / 2, 50, P.info->name, WHITE);
+	sub_button(60, 110, 200, 34, true);
+	sub_text_centered(FONT_VCR12O, BW / 2, 119, "A: next", RGB(40, 24, 10));
+	sub_button(60, 156, 200, 34, false);
+	sub_text_centered(FONT_VCR12O, BW / 2, 165, "START: skip", WHITE);
 }
 
 static void dlg_load_line(void) {
 	const DialogueLine *l = &P.dlg->lines[P.dlgLine];
 	if (l->box != P.dlgBoxId) {
 		sheet_unload(&P.shDlgBox);
-		sheet_load(&P.shDlgBox, dlg_boxes[l->box].sheet, false);
+		sheet_load(&P.shDlgBox, dlg_boxes[l->box].sheet);
 		P.dlgBoxId = l->box;
 	}
 	bool have = false;
@@ -363,7 +362,7 @@ static void dlg_load_line(void) {
 	if (!have) {
 		int slot = P.dlgLine & 3;
 		sheet_unload(&P.shDlgSpk[slot]);
-		sheet_load(&P.shDlgSpk[slot], dlg_speakers[l->speaker].sheet, false);
+		sheet_load(&P.shDlgSpk[slot], dlg_speakers[l->speaker].sheet);
 		P.dlgSpkId[slot] = l->speaker;
 	}
 	P.dlgChars = 0;
@@ -374,7 +373,7 @@ static void dlg_end(void) {
 	sheet_unload(&P.shDlgBox);
 	if (P.dlg->music[0]) audio_stop_music();
 	P.dlg = NULL;
-	sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin, false);
+	sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin);
 	subDirty = true;
 	subStatic = false;
 }
@@ -388,10 +387,10 @@ static void dlg_start(void) {
 	P.dlgBoxId = -1;
 	P.dlgLine = 0;
 	P.dlgFade = 0;
-	font_load(FONT_VCR12O, true);
+	font_load(FONT_VCR12O);
 	if (P.dlg->music[0]) {
 		char m[48];
-		snprintf(m, sizeof(m), "nitro:/snd/%s.adp", P.dlg->music);
+		snprintf(m, sizeof(m), "romfs:/snd/%s.adp", P.dlg->music);
 		audio_play_music(m, true, 0);
 		audio_fade_music(0.8f, 2);
 	}
@@ -417,32 +416,40 @@ static void dlg_update(float dt) {
 
 static void dlg_draw(void) {
 	u32 bg = P.dlg->bg;
-	gfx_rect(0, 0, 256, 192, HEXC(bg), A31(0.7f * P.dlgFade));
+	gfx_depth(-1);
+	gfx_rect(-16, 0, SW + 16, SH, HEXC(bg), AL(0.7f * P.dlgFade));
 	const DialogueLine *l = &P.dlg->lines[P.dlgLine];
-	#define HUDX(v) (((v) - 640) * KDS + 128)
-	#define HUDY(v) (((v) - 360) * KDS + 96)
 	for (int i = 0; i < 4; i++) {
 		if (P.dlgSpkId[i] != l->speaker || !P.shDlgSpk[i].loaded) continue;
 		const DialogueSprite *d = &dlg_speakers[l->speaker];
-		// the 16:9 layout is cropped on the DS: keep the portrait on screen
-		float x = HUDX(d->x), w = d->w * KDS;
-		if (x + w > 262) x = 262 - w;
+		float x = hx(d->x), w = d->w * KH;
+		if (x + w > SW + 6) x = SW + 6 - w;
 		if (x < -6) x = -6;
-		sheet_draw(&P.shDlgSpk[i], 0, x, HUDY(d->y), KDS, WHITE, 31);
+		sheet_draw(&P.shDlgSpk[i], 0, x, hy(d->y), KH, WHITE, 255);
 	}
 	const DialogueSprite *b = &dlg_boxes[l->box];
-	if (P.shDlgBox.loaded) sheet_draw(&P.shDlgBox, 0, HUDX(b->x), HUDY(b->y), KDS, WHITE, 31);
+	// keep the box on the screen (its sprite may be wider than the trimmed frame)
+	float bx = hx(b->x), shift = 0;
+	if (P.shDlgBox.loaded) {
+		float fx0, fy0, fx1, fy1;
+		sheet_frame_bounds(&P.shDlgBox, 0, &fx0, &fy0, &fx1, &fy1);
+		float r = bx + fx1 * KH, l0 = bx + fx0 * KH;
+		if (r > SW - 2) shift = SW - 2 - r;
+		if (l0 + shift < 2) shift = 2 - l0;
+		sheet_draw(&P.shDlgBox, 0, bx + shift, hy(b->y), KH, WHITE, 255);
+	}
 	// text (typewriter), wrapped inside the box
 	char buf[256];
 	int n = (int)P.dlgChars;
 	snprintf(buf, sizeof(buf), "%.*s", n, l->text);
-	float x0 = HUDX(b->x + b->w * 0.12f), y = HUDY(b->y + b->h * 0.56f), maxw = b->w * 0.76f * KDS;
-	if (x0 < 24) x0 = 24;
-	if (x0 + maxw > 244) maxw = 244 - x0;
+	float x0 = hx(b->x + b->w * 0.12f) + shift, y = hy(b->y + b->h * 0.56f), maxw = b->w * 0.76f * KH;
+	if (x0 < 30) x0 = 30;
+	if (x0 + maxw > SW - 30) maxw = SW - 30 - x0;
 	char line[240];
 	line[0] = 0;
 	int ll = 0;
 	const char *p = buf;
+	int lh = font_height(FONT_VCR12O) + 1;
 	while (*p) {
 		const char *w = p;
 		while (*p && *p != ' ') p++;
@@ -453,16 +460,15 @@ static void dlg_draw(void) {
 		char test[240];
 		snprintf(test, sizeof(test), "%s%s%s", line, ll ? " " : "", word);
 		if (ll && font_width(FONT_VCR12O, test) > maxw) {
-			font_draw(FONT_VCR12O, x0, y, line, dlg_box_color[l->box], 31);
-			y += 14;
+			font_draw(FONT_VCR12O, x0, y, line, dlg_box_color[l->box], 255);
+			y += lh;
 			snprintf(line, sizeof(line), "%s", word);
 		} else snprintf(line, sizeof(line), "%s", test);
 		ll = strlen(line);
 		if (*p) p++;
 	}
-	if (ll) font_draw(FONT_VCR12O, x0, y, line, dlg_box_color[l->box], 31);
-	#undef HUDX
-	#undef HUDY
+	if (ll) font_draw(FONT_VCR12O, x0, y, line, dlg_box_color[l->box], 255);
+	gfx_depth(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +476,7 @@ static void dlg_draw(void) {
 // ---------------------------------------------------------------------------
 static bool load_icon(Sheet *sh, const char *name) {
 	for (int i = 0; i < icon_count; i++)
-		if (!strcmp(icon_defs[i].name, name)) return sheet_load(sh, icon_defs[i].sheet, false);
+		if (!strcmp(icon_defs[i].name, name)) return sheet_load(sh, icon_defs[i].sheet);
 	return false;
 }
 
@@ -502,9 +508,9 @@ void play_enter(void) {
 	strum_setup(&P.sl[0], notes, P.chart->nNotes[0], false);
 	strum_setup(&P.sl[1], notes + P.chart->nNotes[0], P.chart->nNotes[1], true);
 	// Blazin': the opponent strumline is hidden and the player one centered (songs/blazin.hxc)
-	if (!strcmp(P.info->id, "blazin")) {
+	if (!strcmp(P.info->id, "blazin") || save.middlescroll) {
 		P.hideOpp = true;
-		for (int i = 0; i < 4; i++) P.sl[0].cx[i] = 128 - 45 + i * LANE_W;
+		for (int i = 0; i < 4; i++) P.sl[0].cx[i] = hx(640 + (i - 1.5f) * NOTE_SPACING);
 	}
 	P.scrollSpeed = P.chart->speed;
 	P.health = 1;
@@ -540,19 +546,19 @@ void play_enter(void) {
 		}
 	}
 	stage_load(st);
-	sheet_load(&P.shNotes, P.skin->sheet, false);
-	sheet_load(&P.shSplash, P.splashDef->sheet, false);
-	sheet_load(&P.shPopup, P.info->pixel ? &sheet_popup_pixel : &sheet_popup_funkin, false);
+	sheet_load(&P.shNotes, P.skin->sheet);
+	sheet_load(&P.shSplash, P.splashDef->sheet);
+	sheet_load(&P.shPopup, P.info->pixel ? &sheet_popup_pixel : &sheet_popup_funkin);
 	bool dialogue = false;
 	for (int i = 0; i < conversation_count; i++) if (!strcmp(conversations[i].song, P.info->tag)) dialogue = true;
 	dialogue = dialogue && g_storyMode && dialogueSong != g_song;
-	if (!dialogue) sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin, false);
+	if (!dialogue) sheet_load(&P.shCountdown, P.info->pixel ? &sheet_countdown_pixel : &sheet_countdown_funkin);
 	load_icon(&P.shIcon[0], P.info->iconP);
 	load_icon(&P.shIcon[1], P.info->iconO);
-	font_load(FONT_VCR8O, true);
-	font_load(FONT_VCR8, false);
-	font_load(FONT_VCR12O, false);
-	font_load(FONT_VCR16O, false);
+	font_load(FONT_VCR8O);
+	font_load(FONT_VCR8);
+	font_load(FONT_VCR12O);
+	font_load(FONT_VCR16O);
 	// camera starts on girlfriend (resetCamera)
 	Character *f = P.chars[ROLE_GF] ? P.chars[ROLE_GF] : P.chars[ROLE_BF];
 	if (f) { P.followX = f->camFocusX; P.followY = f->camFocusY; }
@@ -564,7 +570,7 @@ void play_enter(void) {
 	P.countdownStep = -1;
 	P.curStep = P.curBeat = -1000;
 	conductor_update();
-	P.cam.zoom = P.currentZoom * DS_VIEW;
+	P.cam.zoom = P.currentZoom;
 	P.cam.camX = P.camX;
 	P.cam.camY = P.camY;
 	if (g_storyMode && dialogueSong != g_song) dlg_start();
@@ -595,9 +601,11 @@ void play_leave(void) {
 // ---------------------------------------------------------------------------
 static const char *pauseItems[3] = { "Resume", "Restart Song", "Exit to menu" };
 
-// The bottom screen is drawn incrementally: the static part once, then at
-// most one changed field per frame (software text drawing is slow).
+// The bottom screen is a display list: the static part once, then the
+// fields whose value changed (an opaque fill replaces the old text). The
+// song progress and health bars are drawn every frame (sub hook).
 #define SUB_BG RGB(20, 12, 40)
+#define SUB_PANEL RGB(0x2C, 0x1A, 0x52)
 enum { SF_SCORE, SF_MISSES, SF_COMBO, SF_J0, SF_J1, SF_J2, SF_J3, SF_DEBUG, SF_COUNT };
 static int subVal[SF_COUNT];
 static int subField;
@@ -615,49 +623,84 @@ static int sub_value(int f) {
 static void sub_draw_field(int f) {
 	char b[64], sc[24];
 	static const char *jn[4] = { "Sick", "Good", "Bad", "Shit" };
-	static const u16 jc[4] = { RGB(80, 220, 255), RGB(120, 255, 120), RGB(255, 200, 80), RGB(255, 100, 100) };
+	static const u32 jc[4] = { RGB(80, 220, 255), RGB(120, 255, 120), RGB(255, 200, 80), RGB(255, 100, 100) };
 	switch (f) {
 	case SF_SCORE:
-		sub_fill(0, 50, 256, 22, SUB_BG);
+		sub_fill(8, 54, 304, 30, SUB_PANEL);
 		format_score(sc, P.score);
-		snprintf(b, sizeof(b), "Score: %s", sc);
-		sub_text_centered(FONT_VCR16O, 128, 52, b, RGB(0xF9, 0xCF, 0x51));
+		snprintf(b, sizeof(b), "%s", sc);
+		sub_text_centered(FONT_VCR24O, BW / 2, 54, b, RGB(0xF9, 0xCF, 0x51));
 		break;
 	case SF_MISSES: {
-		sub_fill(0, 76, 256, 17, SUB_BG);
+		sub_fill(8, 88, 304, 20, SUB_BG);
 		int total = P.judged[0] + P.judged[1] + P.judged[2] + P.judged[3] + P.misses;
 		float acc = total ? (P.judged[0] + P.judged[1] * 0.75f + P.judged[2] * 0.4f + P.judged[3] * 0.1f) / total * 100 : 100;
-		snprintf(b, sizeof(b), "Misses: %d  Acc: %d.%02d%%", P.misses, (int)acc, (int)(acc * 100) % 100);
-		sub_text_centered(FONT_VCR12O, 128, 78, b, WHITE);
+		snprintf(b, sizeof(b), "Misses: %d   Acc: %d.%02d%%", P.misses, (int)acc, (int)(acc * 100) % 100);
+		sub_text_centered(FONT_VCR12O, BW / 2, 90, b, WHITE);
 		break;
 	}
 	case SF_COMBO:
-		sub_fill(0, 94, 256, 17, SUB_BG);
-		snprintf(b, sizeof(b), "Combo: %d  (max %d)", P.combo, P.maxCombo);
-		sub_text_centered(FONT_VCR12O, 128, 96, b, WHITE);
+		sub_fill(8, 108, 304, 20, SUB_BG);
+		snprintf(b, sizeof(b), "Combo: %d   (max %d)", P.combo, P.maxCombo);
+		sub_text_centered(FONT_VCR12O, BW / 2, 110, b, P.combo >= 50 ? RGB(0x33, 0xFF, 0xFF) : WHITE);
 		break;
 	case SF_J0: case SF_J1: case SF_J2: case SF_J3: {
 		int i = f - SF_J0;
-		int x = 14 + (i & 1) * 120, y = 118 + (i >> 1) * 18;
-		sub_fill(x, y - 2, 108, 16, RGB(0x22, 0x14, 0x40));
-		snprintf(b, sizeof(b), "%s: %d", jn[i], P.judged[i]);
-		sub_text(FONT_VCR12O, x + 6, y, b, jc[i]);
+		int x = 12 + (i & 1) * 152, y = 132 + (i >> 1) * 26;
+		sub_fill(x, y, 144, 22, RGB(0x22, 0x14, 0x40));
+		sub_fill(x, y, 4, 22, jc[i]);
+		snprintf(b, sizeof(b), "%s", jn[i]);
+		sub_text(FONT_VCR12O, x + 10, y + 3, b, jc[i]);
+		snprintf(b, sizeof(b), "%d", P.judged[i]);
+		sub_text_right(FONT_VCR12O, x + 138, y + 3, b, WHITE);
 		break;
 	}
 	case SF_DEBUG:
 #ifdef DEBUG_HUD
-		sub_fill(0, 158, 256, 34, RGB(0, 0, 0));
-		snprintf(b, sizeof(b), "u%d d%d v%d s%d a%d", (int)prof_show[PF_UPDATE], (int)prof_show[PF_DRAW], (int)prof_show[PF_VBLANK], (int)prof_show[PF_SUB], (int)prof_show[PF_AUDIO]);
-		sub_text(FONT_VCR8, 2, 160, b, RGB(255, 255, 0));
-		snprintf(b, sizeof(b), "lz%d sub%d frame%d free%d", (int)prof_show[PF_DECOMP], (int)prof_show[PF_SUBDRAW], (int)prof_show[PF_FRAME], (int)tex_free_bytes());
-		sub_text(FONT_VCR8, 2, 171, b, RGB(255, 255, 0));
+		sub_fill(0, 186, 320, 30, RGB(0, 0, 0));
+		snprintf(b, sizeof(b), "u%d d%d g%d s%d lz%d f%d", (int)prof_show[PF_UPDATE], (int)prof_show[PF_DRAW], (int)prof_show[PF_GPU],
+			(int)prof_show[PF_SUB], (int)prof_show[PF_DECOMP], (int)prof_show[PF_FRAME]);
+		sub_text(FONT_VCR8, 2, 188, b, RGB(255, 255, 0));
 		extern int perf_drops, perf_frames;
-		snprintf(b, sizeof(b), "drops %d/%d", perf_drops, perf_frames);
-		sub_text(FONT_VCR8, 2, 182, b, RGB(255, 255, 0));
+		snprintf(b, sizeof(b), "drops %d/%d lin %dK dsp %d len %d", perf_drops, perf_frames, (int)(linearSpaceFree() / 1024),
+			audio_ok(), (int)(audio_song_length() / 1000));
+		sub_text(FONT_VCR8, 2, 202, b, RGB(255, 255, 0));
 #endif
 		break;
 	}
 	subVal[f] = sub_value(f);
+}
+
+// every frame on the bottom screen: health bar with the icons, song progress
+static void play_sub_hook(void) {
+	if (P.paused || P.dlg) return;
+	// health bar
+	float x0 = 24, x1 = 296, y = 202, h = 10;
+	gfx_rect(x0 - 2, y - 2, x1 + 2, y + h + 2, BLACK, 255);
+	float split = x0 + (x1 - x0) * (1 - P.health / 2);
+	gfx_rect(x0, y, split, y + h, RGB(255, 0, 0), 255);
+	gfx_rect(split, y, x1, y + h, RGB(0x66, 0xFF, 0x33), 255);
+	for (int i = 0; i < 2; i++) {
+		Sheet *sh = &P.shIcon[i];
+		if (!sh->loaded) continue;
+		bool losing = i == 0 ? P.health < 0.4f : P.health > 1.6f;
+		float k = 0.2f * P.iconScale[i];
+		float sz = 150 * k;
+		float cx = i == 0 ? split + sz / 2 - 6 : split - sz / 2 + 6;
+		if (i == 0) sheet_draw_flip(sh, losing, cx + sz / 2, y + h / 2 - sz / 2, k, k, 1, WHITE, 255);
+		else sheet_draw(sh, losing, cx - sz / 2, y + h / 2 - sz / 2, k, WHITE, 255);
+	}
+	// song progress (V-Slice time bar)
+	float len = audio_song_length();
+	float t = P.started ? P.songPos : 0;
+	float k = len > 0 ? clampf(t / len, 0, 1) : 0;
+	gfx_rect(0, 228, BW, 240, RGB(0x10, 0x08, 0x20), 255);
+	gfx_gradient_h(0, 230, BW * k, 238, RGB(0x60, 0x30, 0xC0), RGB(0x33, 0xFF, 0xFF), 255);
+	char b[32];
+	int rem = len > 0 ? (int)((len - t) / 1000) : 0;
+	if (rem < 0) rem = 0;
+	snprintf(b, sizeof(b), "%d:%02d", rem / 60, rem % 60);
+	font_draw_centered(FONT_VCR8O, BW / 2, 227, b, WHITE, 255);
 }
 
 static void draw_sub(void) {
@@ -665,25 +708,27 @@ static void draw_sub(void) {
 	sub_clear(SUB_BG);
 	if (P.paused) {
 		subStatic = false;
-		sub_text_centered(FONT_VCR16O, 128, 10, "PAUSED", WHITE);
+		sub_gradient(0, 0, BW, BH, RGB(40, 24, 72), RGB(10, 6, 20));
+		sub_text_centered(FONT_VCR24O, BW / 2, 12, "PAUSED", WHITE);
 		snprintf(b, sizeof(b), "%s (%s)", P.info->name, diff_name(g_diff));
-		sub_text_centered(FONT_VCR12O, 128, 34, b, RGB(200, 200, 220));
+		sub_text_centered(FONT_VCR12O, BW / 2, 48, b, RGB(200, 200, 220));
 		for (int i = 0; i < 3; i++) {
-			int y = 56 + i * 40;
-			sub_fill(28, y, 200, 32, i == pauseSel ? RGB(0xF9, 0xCF, 0x51) : RGB(60, 40, 90));
-			sub_text_centered(FONT_VCR12O, 128, y + 10, pauseItems[i], i == pauseSel ? RGB(30, 20, 10) : WHITE);
+			int y = 76 + i * 50;
+			sub_button(40, y, 240, 40, i == pauseSel);
+			sub_text_centered(FONT_VCR16O, BW / 2, y + 9, pauseItems[i], i == pauseSel ? RGB(40, 24, 10) : WHITE);
 		}
 		return;
 	}
-	sub_fill(0, 0, 256, 30, RGB(0x2A, 0x18, 0x50));
-	sub_text_centered(FONT_VCR16O, 128, 6, P.info->name, WHITE);
+	sub_gradient(0, 0, BW, 44, RGB(0x4A, 0x2A, 0x86), RGB(0x2A, 0x18, 0x50));
+	sub_text_centered(FONT_VCR16O, BW / 2, 4, P.info->name, WHITE);
 	snprintf(b, sizeof(b), "%s - %s", P.info->artist, diff_name(g_diff));
-	sub_text_centered(FONT_VCR8, 128, 34, b, RGB(190, 190, 210));
-	if (save.botplay) sub_text_centered(FONT_VCR12O, 128, 158, "BOTPLAY", RGB(255, 255, 120));
+	sub_text_centered(FONT_VCR8, BW / 2, 28, b, RGB(190, 190, 210));
+	if (save.botplay) sub_text_centered(FONT_VCR12O, BW / 2, 180, "BOTPLAY", RGB(255, 255, 120));
 #ifndef DEBUG_HUD
-	sub_text_centered(FONT_VCR8, 128, 178, "START: pause", RGB(150, 140, 170));
+	else sub_text_centered(FONT_VCR8, BW / 2, 184, "START: pause", RGB(150, 140, 170));
 #endif
 	for (int f = 0; f < SF_COUNT; f++) sub_draw_field(f);
+	sub_set_hook(play_sub_hook);
 	subStatic = true;
 }
 
@@ -726,10 +771,8 @@ static void update_pause(void) {
 	if (kDown & KEY_A) { pause_select(); return; }
 	if (kDown & (KEY_START | KEY_B)) { pauseSel = 0; pause_select(); return; }
 	if (kDown & KEY_TOUCH) {
-		for (int i = 0; i < 3; i++) {
-			int y = 56 + i * 40;
-			if (touch.py >= y && touch.py < y + 32 && touch.px >= 28 && touch.px < 228) { pauseSel = i; pause_select(); return; }
-		}
+		for (int i = 0; i < 3; i++)
+			if (touch_in(40, 76 + i * 50, 240, 40)) { pauseSel = i; pause_select(); return; }
 	}
 }
 
@@ -794,7 +837,7 @@ static void countdown_tick(int k) {
 	}
 }
 
-void play_flash(u16 color, float dur) {
+void play_flash(u32 color, float dur) {
 	if (!save.flashing) return;
 	P.flashCol = color;
 	P.flashA = 1;
@@ -827,8 +870,8 @@ void play_update(float dt) {
 		if (P.songPos >= 0) {
 			P.started = true;
 			char a[48], b[48];
-			snprintf(a, sizeof(a), "nitro:/snd/%s_inst.adp", P.info->tag);
-			snprintf(b, sizeof(b), "nitro:/snd/%s_voices.adp", P.info->tag);
+			snprintf(a, sizeof(a), "romfs:/snd/%s_inst.adp", P.info->tag);
+			snprintf(b, sizeof(b), "romfs:/snd/%s_voices.adp", P.info->tag);
 			audio_play_song(a, b);
 			P.songPos = 0;
 		}
@@ -838,6 +881,13 @@ void play_update(float dt) {
 		if (fabsf(t - predicted) > 30) P.songPos = t;
 		else P.songPos = predicted + (t - predicted) * 0.1f;
 		if (audio_song_finished()) { end_song(); return; }
+		if (audio_song_length() <= 0) {
+			// no audio: end after the last note
+			float last = 0;
+			for (int k = 0; k < 2; k++)
+				if (P.sl[k].n) { Note *n = &P.sl[k].notes[P.sl[k].n - 1]; if (n->t + n->len > last) last = n->t + n->len; }
+			if (P.songPos > last + 2000) { end_song(); return; }
+		}
 	}
 	conductor_update();
 	int step = (int)floorf(P.stepF), beat = (int)floorf(P.beatF);
@@ -869,7 +919,7 @@ void play_update(float dt) {
 	// events
 	while (P.evIdx < P.chart->nEvents && P.events[P.evIdx].t <= P.songPos) run_event(&P.events[P.evIdx++]);
 
-	if (kDown & KEY_START) {
+	if ((kDown & KEY_START) || ((kDown & KEY_TOUCH) && touch.py < 180)) {
 		P.paused = true;
 		pauseSel = 0;
 		audio_pause_song(true);
@@ -906,7 +956,7 @@ void play_update(float dt) {
 	}
 	P.cam.camX = P.camX;
 	P.cam.camY = P.camY;
-	P.cam.zoom = P.currentZoom * P.bopMult * DS_VIEW;
+	P.cam.zoom = P.currentZoom * P.bopMult;
 	for (int i = 0; i < 2; i++) P.iconScale[i] = lerpf(1, P.iconScale[i], powf(0.85f, dt * 60));
 
 	// popups
@@ -944,43 +994,42 @@ void play_update(float dt) {
 // ---------------------------------------------------------------------------
 // drawing
 // ---------------------------------------------------------------------------
+#define HUD_DEPTH -1.5f
+
 static void draw_strum(int idx) {
 	Strum *s = &P.sl[idx];
 	const NoteSkin *sk = P.skin;
 	Sheet *sh = &P.shNotes;
 	if (!sh->loaded) return;
 	float hz = P.hudZoom;
-	float ks = KDS * s->scale * hz;
+	float ks = KH * s->scale * hz;
 	bool down = save.downscroll;
 	float sy0 = strum_y();
-	#define HX(v) (((v) - 128) * hz + 128)
-	#define HY(v) (((v) - 96) * hz + 96)
+	#define HX(v) (((v) - 200) * hz + 200)
+	#define HY(v) (((v) - 120) * hz + 120)
 	for (int d = 0; d < 4; d++) {
 		int fr = sk->fStatic[d];
 		int f = (int)(s->animTime[d] * 24);
 		if (s->anim[d] == 2) fr = sk->confirm[d][f < sk->nConfirm[d] ? f : sk->nConfirm[d] - 1];
 		else if (s->anim[d] == 1) fr = sk->press[d][f < sk->nPress[d] ? f : sk->nPress[d] - 1];
-		sheet_draw(sh, fr, HX(s->cx[d]), HY(sy0), ks, WHITE, 31);
+		sheet_draw(sh, fr, HX(s->cx[d]), HY(sy0), ks, WHITE, 255);
 	}
-	float pxPerMs = 0.45f * P.scrollSpeed * KDS * s->scale;
+	float pxPerMs = 0.45f * P.scrollSpeed * KH * s->scale;
 	float pos = P.songPos;
 	float dir = down ? -1 : 1;
 	for (int i = s->first; i < s->n; i++) {
 		Note *n = &s->notes[i];
 		float dy = (n->t - pos) * pxPerMs;
-		if (dy > 200) break;
+		if (dy > 280) break;
 		float x = s->cx[n->dir];
 		// hold trail
 		if (n->len > 0 && n->state != NS_DONE) {
 			float t0 = n->state == NS_HELD ? n->holdEnd : n->t;
 			float y0 = sy0 + dir * (t0 - pos) * pxPerMs;
 			float y1 = sy0 + dir * (n->t + n->len - pos) * pxPerMs;
-			float w = sk->holdW * KDS * s->scale;
-			float eh = sk->endH * KDS * s->scale;
-			int alpha = n->state == NS_MISSED ? 10 : 31;
-			const PartDef *pb = &sh->def->parts[sh->def->frames[sk->fHold[n->dir]].first];
-			const PartDef *pe = &sh->def->parts[sh->def->frames[sk->fEnd[n->dir]].first];
-			(void)pb; (void)pe;
+			float w = sk->holdW * KH * s->scale;
+			float eh = sk->endH * KH * s->scale;
+			int alpha = n->state == NS_MISSED ? 90 : 255;
 			if (!down) {
 				float ye = y1 - eh;
 				if (ye < y0) ye = y0;
@@ -997,8 +1046,8 @@ static void draw_strum(int idx) {
 		}
 		if (n->state != NS_PENDING) continue;
 		float ny = sy0 + dir * dy;
-		if (ny < -40 || ny > 232) continue;
-		sheet_draw(sh, sk->fNote[n->dir], HX(x), HY(ny), ks, WHITE, 31);
+		if (ny < -50 || ny > 290) continue;
+		sheet_draw(sh, sk->fNote[n->dir], HX(x), HY(ny), ks, WHITE, 255);
 	}
 	// splashes
 	if (!s->cpu && P.shSplash.loaded) {
@@ -1007,7 +1056,7 @@ static void draw_strum(int idx) {
 			const u16 *sq = P.splashDef->seq[P.splash[i].lane][0];
 			int f = (int)(P.splash[i].t * 24);
 			if (f >= sq[1]) continue;
-			sheet_draw(&P.shSplash, sq[0] + f, HX(s->cx[P.splash[i].lane]), HY(sy0), ks, WHITE, A31(P.splashDef->alpha));
+			sheet_draw(&P.shSplash, sq[0] + f, HX(s->cx[P.splash[i].lane]), HY(sy0), ks, WHITE, AL(P.splashDef->alpha));
 		}
 	}
 	#undef HX
@@ -1015,58 +1064,63 @@ static void draw_strum(int idx) {
 }
 
 static void draw_healthbar(void) {
-	float y = save.downscroll ? (72 - 360) * KDS + 96 : (648 - 360) * KDS + 96;
-	float w = 601 * KDS, h = 19 * KDS;
-	float x0 = 128 - w / 2;
-	gfx_rect(x0, y, x0 + w, y + h, RGB(0, 0, 0), 31);
-	float split = x0 + 4 * KDS + (w - 8 * KDS) * (1 - P.health / 2);
-	gfx_rect(x0 + 4 * KDS, y + 4 * KDS, split, y + h - 4 * KDS, RGB(255, 0, 0), 31);
-	gfx_rect(split, y + 4 * KDS, x0 + w - 4 * KDS, y + h - 4 * KDS, RGB(0x66, 0xFF, 0x33), 31);
-	// score text (PlayState.scoreText: under the health bar)
+	// PlayState.healthBar: y = FlxG.height * 0.9 (downscroll: 72)
+	float hz = P.hudZoom;
+	#define HX(v) (((v) - 200) * hz + 200)
+	#define HY(v) (((v) - 120) * hz + 120)
+	float y = save.downscroll ? hy(72) : hy(648);
+	float w = 601 * KH, h = 19 * KH;
+	float x0 = 200 - w / 2;
+	gfx_rect(HX(x0), HY(y), HX(x0 + w), HY(y + h), BLACK, 255);
+	float b = 4 * KH;
+	float split = x0 + b + (w - 2 * b) * (1 - P.health / 2);
+	gfx_rect(HX(x0 + b), HY(y + b), HX(split), HY(y + h - b), RGB(255, 0, 0), 255);
+	gfx_rect(HX(split), HY(y + b), HX(x0 + w - b), HY(y + h - b), RGB(0x66, 0xFF, 0x33), 255);
+	// score text (PlayState.scoreText: under the health bar, right aligned)
 	{
-		char b[48], sc[24];
+		char t[64], sc[24];
 		format_score(sc, P.score);
-		if (save.botplay) snprintf(b, sizeof(b), "Bot Play Enabled");
-		else snprintf(b, sizeof(b), "Score: %s", sc);
-		font_draw_centered(FONT_VCR8O, 128, save.downscroll ? y + h + 3 : y + h + 4, b, WHITE, 31);
+		if (save.botplay) snprintf(t, sizeof(t), "Bot Play Enabled");
+		else snprintf(t, sizeof(t), "Score: %s", sc);
+		font_draw(FONT_VCR8O, HX(x0 + w - font_width(FONT_VCR8O, t) + 4), HY(y + h + 5), t, WHITE, 255);
 	}
 	// icons (HealthIcon: 150 px, centered around the split point)
-	float isz = 150 * KDS;
+	float isz = 150 * KH;
 	for (int i = 0; i < 2; i++) {
 		Sheet *sh = &P.shIcon[i];
 		if (!sh->loaded) continue;
 		bool losing = i == 0 ? P.health < 0.4f : P.health > 1.6f;
 		float sc = P.iconScale[i];
-		float cx = i == 0 ? split + isz / 2 - 26 * KDS : split - isz / 2 + 26 * KDS;
+		float cx = i == 0 ? split + isz / 2 - 26 * KH : split - isz / 2 + 26 * KH;
 		float cy = y + h / 2;
-		float k = KDS * sc;
+		float k = KH * sc * hz;
 		float hw = isz * sc / 2;
-		if (i == 0) sheet_draw_flip(sh, losing, cx + hw, cy - hw, k, k, 1, WHITE, 31);
-		else sheet_draw(sh, losing, cx - hw, cy - hw, k, WHITE, 31);
+		if (i == 0) sheet_draw_flip(sh, losing, HX(cx + hw), HY(cy - hw), k, k, 1, WHITE, 255);
+		else sheet_draw(sh, losing, HX(cx - hw), HY(cy - hw), k, WHITE, 255);
 	}
+	#undef HX
+	#undef HY
 }
 
 void play_draw(void) {
 	if (!P.chart) return;
 	stage_draw(&P.cam);
-	if (P.flashA > 0.01f) gfx_rect(0, 24, 256, 168, P.flashCol, A31(P.flashA > 0.96f ? 0.96f : P.flashA));
-	// letterbox: the game camera shows exactly the 1280x720 view of the game
-	// (alpha 30: translucent polygons keep the drawing order on the DS 3D engine)
-	gfx_rect(0, 0, 256, 24, RGB(0, 0, 0), 30);
-	gfx_rect(0, 168, 256, 192, RGB(0, 0, 0), 30);
-	// popups (camHUD)
+	if (P.flashA > 0.01f) gfx_rect(-16, 0, SW + 16, SH, P.flashCol, AL(P.flashA > 0.96f ? 0.96f : P.flashA));
+	gfx_depth(HUD_DEPTH);
+	// popups (rating / combo)
 	if (P.shPopup.loaded) {
 		for (int i = 0; i < 16; i++) {
 			Popup *p = &P.pops[i];
 			if (!p->used) continue;
-			sheet_draw(&P.shPopup, p->frame, (p->x - 640) * KDS + 128, (p->y - 360) * KDS + 96, KDS, WHITE, A31(p->alpha));
+			sheet_draw(&P.shPopup, p->frame, hx(p->x), hy(p->y), KH, WHITE, AL(p->alpha));
 		}
 	}
 	draw_healthbar();
 	if (!P.hideOpp) draw_strum(1);
 	draw_strum(0);
 	if (P.countdownAlpha > 0.01f && P.shCountdown.loaded)
-		sheet_draw(&P.shCountdown, P.countdownFrame, 128, 96, KDS * 0.6f, WHITE, A31(P.countdownAlpha));
+		sheet_draw(&P.shCountdown, P.countdownFrame, 200, 120, KH * 0.9f, WHITE, AL(P.countdownAlpha));
+	gfx_depth(0);
 	if (P.dlg) dlg_draw();
-	if (P.pauseA > 0.01f) gfx_rect(0, 0, 256, 192, 0, A31(P.pauseA));
+	if (P.pauseA > 0.01f) gfx_rect(-16, 0, SW + 16, SH, BLACK, AL(P.pauseA));
 }

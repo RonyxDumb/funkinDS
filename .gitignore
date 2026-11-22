@@ -1,10 +1,10 @@
 build/
 build_tools/
 *.elf
-*.nds
+*.3dsx
+*.smdh
 __pycache__/
 # generated from your own copy of the game assets (not redistributable)
-nitrofiles/
-maxmod_data/
+romfs/
 source/gen_assets.c
 include/gen_assets.h

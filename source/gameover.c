@@ -18,7 +18,7 @@ void gameover_enter(void) {
 	chr_place(&dead, &si->stage->chars[0]);
 	chr_play(&dead, "firstDeath", true);
 	if (dead.anim < 0) chr_play(&dead, "singUPmiss", true);
-	cam.zoom = si->stage->zoom * 0.75f;
+	cam.zoom = si->stage->zoom;
 	cam.camX = P.camX;
 	cam.camY = P.camY;
 	// GameOverSubState: the camera moves to Boyfriend's midpoint
@@ -29,12 +29,12 @@ void gameover_enter(void) {
 	audio_sfx(pixel ? SFX_LOSS_PIXEL : SFX_LOSS, 1);
 	phase = 0;
 	timer = 0;
-	font_load(FONT_VCR12O, false);
-	font_load(FONT_VCR8, false);
-	sub_clear(RGB(0, 0, 0));
-	sub_text_centered(FONT_VCR12O, 128, 70, "GAME OVER", RGB(255, 80, 80));
-	sub_text_centered(FONT_VCR8, 128, 100, "A: retry    B: exit", WHITE);
-	sub_present();
+	sub_gradient(0, 0, BW, BH, RGB(40, 0, 0), RGB(0, 0, 0));
+	sub_text_centered(FONT_VCR24O, BW / 2, 50, "GAME OVER", RGB(255, 80, 80));
+	sub_button(40, 110, 240, 40, true);
+	sub_text_centered(FONT_VCR16O, BW / 2, 119, "A: Retry", RGB(40, 24, 10));
+	sub_button(40, 164, 240, 40, false);
+	sub_text_centered(FONT_VCR16O, BW / 2, 173, "B: Exit", WHITE);
 	(void)gy;
 }
 
@@ -52,14 +52,14 @@ void gameover_update(float dt) {
 	if (phase == 0 && (dead.finished || timer > 3)) {
 		phase = 1;
 		chr_play(&dead, "deathLoop", true);
-		audio_play_music(pixel ? "nitro:/snd/gameover_pixel.adp" : "nitro:/snd/gameover.adp", true, 1);
+		audio_play_music(pixel ? "romfs:/snd/gameover_pixel.adp" : "romfs:/snd/gameover.adp", true, 1);
 	}
-	if (phase < 2 && (kDown & KEY_A)) {
+	if (phase < 2 && ((kDown & KEY_A) || touch_in(40, 110, 240, 40))) {
 		phase = 2;
 		timer = 0;
 		chr_play(&dead, "deathConfirm", true);
-		audio_play_music(pixel ? "nitro:/snd/gameoverend_pixel.adp" : "nitro:/snd/gameoverend.adp", false, 1);
-	} else if (phase < 2 && (kDown & KEY_B)) {
+		audio_play_music(pixel ? "romfs:/snd/gameoverend_pixel.adp" : "romfs:/snd/gameoverend.adp", false, 1);
+	} else if (phase < 2 && ((kDown & KEY_B) || touch_in(40, 164, 240, 40))) {
 		menu_music(false);
 		state_switch(g_storyMode ? ST_STORY : ST_FREEPLAY);
 		return;

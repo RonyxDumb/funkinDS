@@ -1,6 +1,17 @@
-# Friday Night Funkin' DS
+# Friday Night Funkin' 3DS
 
-An unofficial Nintendo DS port of [Friday Night Funkin'](https://github.com/FunkinCrew/Funkin) (V-Slice). This is not HaxeFlixel running on a DS. The game was rewritten in C with libnds, following the V-Slice source (PlayState, Strumline, Conductor, BaseCharacter / Bopper, Stage, the song events and the stage scripts), and uses the original game data and art converted for the hardware.
+An unofficial Nintendo 3DS port of [Friday Night Funkin'](https://github.com/FunkinCrew/Funkin) (V-Slice), based on the Nintendo DS port of this repository (the `3ds` branch; the DS version is on the main branch). The game is written in C with libctru and citro3d, following the V-Slice source (PlayState, Strumline, Conductor, BaseCharacter / Bopper, Stage, the song events and the stage scripts), and uses the original game data and art converted for the hardware.
+
+## What is new on the 3DS
+
+- **Graphics at the 3DS resolution**: the whole 16:9 game view on the 400x240 top screen, the real V-Slice HUD layout (both strumlines at full size, health bar, score). Characters, stages and HUD are converted at about twice the DS resolution, in true color with smooth (alpha blended, bilinear filtered) edges instead of 255 colors with 1-bit transparency.
+- **Stereoscopic 3D**: every stage layer gets its depth from its scroll factor (the background behind the screen, the characters on it, the HUD in front). The strength can be set in the options (0-200%) and follows the 3D slider.
+- **Blend-mode overlays**: the add / multiply lights of the Erect stages and Weekend 1 (stage lights, light maps, Blazin' sky and foreground) that the DS could not draw.
+- **Audio**: 32 kHz stereo instrumentals (DS: 22 kHz mono), mixed by the DSP; a thread keeps the music streaming while the game loads.
+- **Bottom screen** drawn by the GPU: score, accuracy, combo and judgements, a health bar with the icons, the song time bar, touch buttons in every menu (tap the screen to pause).
+- **Cutscenes** at 400x240, 15 fps.
+- New options: middlescroll, 3D depth. Extra keys: ZL / ZR for the left / right notes.
+- New 3DS: runs at 804 MHz.
 
 ## What is ported
 
@@ -14,11 +25,11 @@ An unofficial Nintendo DS port of [Friday Night Funkin'](https://github.com/Funk
 - **Week 6 dialogue** (Senpai, Roses, Thorns) and the **Weekend 1 video cutscenes** in story mode.
 - **Pixel note style** for Week 6.
 
-Not ported: the Week 7 and Week 5 in-engine cutscenes, stage shaders (rain, lighting) and blend-mode overlays, the animated freeplay capsules and the sticker transitions.
+Not ported: the Week 7 and Week 5 in-engine cutscenes, stage shaders (rain, lighting, color adjustments), the animated freeplay capsules and the sticker transitions.
 
 ## Assets
 
-The Friday Night Funkin' source code is Apache 2.0, but the game assets (art, music, charts, sounds) are not redistributable: see the [Funkin.assets license](https://github.com/FunkinCrew/funkin.assets/blob/main/LICENSE.md). **This repository therefore contains no game assets and no prebuilt ROM.** You build the ROM yourself from your own copy of the assets.
+The Friday Night Funkin' source code is Apache 2.0, but the game assets (art, music, charts, sounds) are not redistributable: see the [Funkin.assets license](https://github.com/FunkinCrew/funkin.assets/blob/main/LICENSE.md). **This repository therefore contains no game assets and no prebuilt build.** You build the game yourself from your own copy of the assets.
 
 ## Building
 
@@ -26,10 +37,10 @@ The Friday Night Funkin' source code is Apache 2.0, but the game assets (art, mu
 
 - Linux or Windows 10/11 with **WSL2 Ubuntu**.
 - Python 3, Pillow, NumPy, FFmpeg, Git and a C compiler.
-- **Docker** (recommended): `build.sh` uses the official `devkitpro/devkitarm` image, so local devkitPro is not required.
-- Alternatively, install [devkitPro](https://devkitpro.org) with `nds-dev` and build with `make`.
+- **Docker** (recommended): `build.sh` uses the official `devkitpro/devkitarm` image (it includes `3ds-dev`, citro3d and the zlib portlib), so local devkitPro is not required.
+- Alternatively, install [devkitPro](https://devkitpro.org) with `3ds-dev` and `3ds-zlib` and build with `make`.
 
-The original game assets are required separately; this repository contains no assets or prebuilt ROM.
+The original game assets are required separately; this repository contains no assets or prebuilt build.
 
 ### 1. Install Ubuntu / WSL dependencies
 
@@ -58,7 +69,7 @@ On Docker Desktop, first check that the app is running and WSL integration is en
 
 ```sh
 cd ~
-git clone https://github.com/RonyxDumb/funkinDS.git
+git clone -b 3ds https://github.com/RonyxDumb/funkinDS.git
 cd funkinDS
 ```
 
@@ -86,7 +97,7 @@ git clone --depth 1 --filter=blob:none --sparse https://github.com/FunkinCrew/Fu
 git -C funkin-art sparse-checkout set icons
 ```
 
-Without the optional `funkin-art` checkout, skip the `--art` option below; Boyfriend's health icon is used.
+Without the optional `funkin-art` checkout, skip the `--art` option below; Boyfriend's health icon is used for the Home Menu icon.
 
 ### 5. Convert assets
 
@@ -94,7 +105,9 @@ Without the optional `funkin-art` checkout, skip the `--art` option below; Boyfr
 python3 tools/convert.py funkin-assets --art=funkin-art
 ```
 
-This creates `nitrofiles/`, `maxmod_data/`, `source/gen_assets.c` and `include/gen_assets.h`. Allow sufficient free disk space.
+This creates `romfs/`, `source/gen_assets.c` and `include/gen_assets.h` (about 500 MB, mostly audio). Allow sufficient free disk space.
+
+Options: `--mono` (mono audio, smaller), `--rate=22050` (audio sample rate), `--video-fps=12`, `--no-audio`.
 
 ### 6. Build
 
@@ -107,7 +120,7 @@ chmod +x build.sh
 
 `./build.sh` without arguments **only builds**; it does not convert the assets again.
 
-**With locally installed devkitPro / nds-dev:**
+**With locally installed devkitPro / 3ds-dev:**
 
 ```sh
 make
@@ -115,7 +128,7 @@ make
 
 For local `make`, ensure `DEVKITARM` and the other devkitPro environment settings are configured.
 
-The output is **`FunkinDS.nds`** at the root of the repository, approximately **200 MB** (IMA ADPCM audio and 256×192 cutscenes at 12 fps). Test it in **melonDS** or with compatible flashcart software such as TWiLight Menu++ / nds-bootstrap.
+The output is **`Funkin3DS.3dsx`** at the root of the repository, approximately **500 MB** (the game data is embedded as RomFS). Test it in **Azahar** (or Citra / Lime3DS) or on a 3DS with custom firmware.
 
 ### Troubleshooting
 
@@ -125,40 +138,46 @@ The output is **`FunkinDS.nds`** at the root of the repository, approximately **
 - **`No module named PIL` or `numpy`**: `source .venv/bin/activate` then `python3 -m pip install pillow numpy`.
 - **`ffmpeg: command not found`**: `sudo apt install ffmpeg`.
 - **`Please set DEVKITARM`**: local `make` needs devkitPro configured; alternatively use Docker via `./build.sh`.
+- **"Game data not found in RomFS"** on the console: the assets were not converted before building (step 5).
 - **Missing or stale in-game assets**: rerun asset conversion before rebuilding.
 
 ### GitHub Actions
 
-`.github/workflows/build.yml` builds the ROM on every push: it downloads Funkin.assets (and the icon from Funkin.art), converts them (the result is cached until the assets or the converter change, the first run takes a while) and uploads `FunkinDS.nds` as a workflow artifact. Since the game assets are not redistributable, the ROM is never attached to a public release.
+`.github/workflows/build.yml` builds the game on every push: it downloads Funkin.assets (and the icon from Funkin.art), converts them (the result is cached until the assets or the converter change, the first run takes a while) and uploads `Funkin3DS.3dsx` as a workflow artifact. Since the game assets are not redistributable, the build is never attached to a public release.
 
 ## Playing
 
-Copy `FunkinDS.nds` to your flashcart (TWiLight Menu++ / nds-bootstrap) or open it in **melonDS**.
+Copy `Funkin3DS.3dsx` to `/3ds/` on the SD card and start it from the **Homebrew Launcher** (a 3DS with custom firmware, e.g. Luma3DS). Sound needs the DSP firmware dump (`/3ds/dspfirm.cdc`, made by DSP1 once); without it the game runs silently. In **Azahar**, open the `.3dsx` with *File > Load File*.
 
 | Action | Buttons |
 | --- | --- |
-| Notes | D-pad or Y / B / X / A (left, down, up, right) |
-| Pause | START |
+| Notes | D-pad / Circle Pad, Y / B / X / A, ZL / ZR (left, right) |
+| Pause | START, or tap the bottom screen |
 | Menus | D-pad, A / START = accept, B = back, L / R = difficulty, or the touch screen |
 | Character select (freeplay) | SELECT |
 | Dialogue / cutscenes | A = next, START = skip |
+| Quit | START + SELECT + L + R, or the HOME menu |
 
-The gameplay is on the top screen; the bottom screen shows the score, misses, accuracy and judgements, and the pause menu. Scores and options are saved to `/data/funkinds.sav` on the SD card.
+The gameplay is on the top screen; the bottom screen shows the score, misses, accuracy, combo and judgements, the health bar and the time left, and the pause menu. Scores and options are saved to `sdmc:/3ds/funkin3ds/save.dat`.
 
-## How it fits on a DS
+## How it works on a 3DS
 
-- **Characters** are stored as 8 bpp frames, LZ77-compressed in RAM and decompressed into a VRAM slot when the frame changes.
-- **Stages** are cropped to the area the camera can show, and their texture resolution is chosen per stage to fit the VRAM budget (pixel stages keep one texel per pixel).
-- The top screen shows the 16:9 view at 80% of a 4:3 crop; the strumlines are laid out for the narrower screen.
+- **Rendering** (`source/gfx.c`): every sprite is a quad appended to a draw list per screen; the lists are drawn with citro3d at the end of the frame, the top screen twice in stereoscopic 3D with a per-vertex depth. Textures are premultiplied alpha, stored by the converter already in the GPU tile order and zlib compressed.
+- **Characters** are stored as 8 bpp frames (256 premultiplied RGBA colors per character, LZ77 compressed); a frame is expanded into the character's texture when it changes.
+- **Stages** are cropped to the area the camera can show, and their texture resolution is chosen per stage to fit a 9 MB budget (pixel stages keep one texel per pixel, nearest filtering).
+- **Bottom screen** (`source/sub.c`): the menus write into a display list (like they drew into a bitmap on the DS) that the GPU redraws every frame.
+- **Audio** (`source/audio.c`): IMA ADPCM streams decoded by a thread woken by the DSP, NDSP channels for the music, the voices and the sound effects.
 
 ## Project structure
 
 ```
-source/        engine (gfx, audio, tweens, bottom screen), PlayState (play.c),
-               characters, stages and stage scripts (stage.c), menus, game over
+source/        engine (gfx + render.v.pica shader, audio, tweens, bottom screen),
+               PlayState (play.c), characters, stages and stage scripts (stage.c),
+               menus, game over
 include/       headers
 tools/         convert.py (asset converter), animate.py (Animate atlas flattener),
-               adpcm.c / lz10.c (encoders), melonheadless (headless melonDS test frontend)
+               adpcm.c / lz10.c (encoders), emutest.sh (records a build running in
+               the Azahar emulator, with -DAUTOTEST scripted inputs)
 ```
 
 ## Credits
